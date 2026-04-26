@@ -1,0 +1,32 @@
+node_modules
+dist
+dist-ssr
+.DS_Store
+*.local
+.env
+.env.*
+!.env.example
+
+# Build / TS / Vite caches
+*.tsbuildinfo
+.cache/
+
+# Tauri / Rust
+src-tauri/target
+src-tauri/gen
+# Cargo.lock 必须随 binary 项目提交（保证 cargo build 复现），故不排除
+
+# Dev-time protobuf dumps（抓包/还原产物，非源码）
+GetOneTimeAuthToken
+*.proto.bin
+
+# Python tools cache
+__pycache__/
+*.pyc
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo

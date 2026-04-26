@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --color-surface: #1c1c1eee;
+  --color-surface-light: #ffffffee;
+  --color-border: #ffffff14;
+  --color-border-light: #00000014;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  color: #f4f4f5;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (prefers-color-scheme: light) {
+  html,
+  body,
+  #root {
+    color: #18181b;
+  }
+}
+
+/* 小三角（指向 Tray icon） */
+.tray-arrow {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 14px;
+  height: 7px;
+  overflow: hidden;
+}
+.tray-arrow::after {
+  content: "";
+  position: absolute;
+  top: 3.5px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+@media (prefers-color-scheme: light) {
+  .tray-arrow::after {
+    background: var(--color-surface-light);
+    border-color: var(--color-border-light);
+  }
+}
+
+/* webkit scrollbar 收紧 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(150, 150, 150, 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 150, 150, 0.5);
+}
+
+/* 拖拽区域：仅 header 顶部小条 */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
