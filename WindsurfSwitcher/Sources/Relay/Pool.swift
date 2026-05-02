@@ -113,13 +113,16 @@ public actor Pool {
     public func size() -> Int { entries.count }
 
     public func lease() async throws -> Lease {
-        try await lease(cascadeId: nil, excludes: [])
+        try await lease(cascadeId: nil, excludes: [], strictBest: false)
     }
 
     /// 3-pass lease：参考 pool.rs::lease_with_excludes。
+    /// - strictBest: true 时不分桶（bucket=1），必给 score 最高号；
+    ///   GetUserJwt 等"播种"调用建议传 true，让 LS 拿到的 JWT 出自最强号。
     public func lease(
         cascadeId: String?,
-        excludes: [String]
+        excludes: [String],
+        strictBest: Bool = false
     ) async throws -> Lease {
         let now = nowProvider()
         gcSticky(now: now)
@@ -129,9 +132,14 @@ public actor Pool {
         }
 
         // Pass 1：actor 内选号
+        // strictBest=true 时强制 sticky 让位（绑定不该越过 score 最高号）；
+        // 仍兜底 pickEarliestCooldown 防 AllExcluded 撞墙。
+        let stickyPick: PoolEntry? = strictBest
+            ? nil
+            : pickWithSticky(cascadeId: cascadeId, now: now, excludes: excludes)
         let chosen: PoolEntry? =
-            pickWithSticky(cascadeId: cascadeId, now: now, excludes: excludes)
-            ?? pickBestAvailable(now: now, excludes: excludes)
+            stickyPick
+            ?? pickBestAvailable(now: now, excludes: excludes, strictBest: strictBest)
             ?? pickEarliestCooldown(now: now, excludes: excludes)
 
         guard let entry = chosen else {
@@ -368,15 +376,26 @@ public actor Pool {
 
     private func pickBestAvailable(
         now: Int64,
-        excludes: [String]
+        excludes: [String],
+        strictBest: Bool = false
     ) -> PoolEntry? {
-        let bucket = max(1, config.scoreBucketSize)
+        // strictBest=true → bucket=1（不分桶，精确比 score）；
+        // 否则用 config.scoreBucketSize（默认 100）让"分差小"的号走 LRU。
+        let bucket = strictBest ? Int64(1) : max(1, config.scoreBucketSize)
         let candidates = entries.values
             .filter { !$0.isLocked(now: now) }
             .filter { !excludes.contains($0.accountId) }
 
         // 各排序键都升序优先（min_by 拿"最小"）
         return candidates.min(by: { a, b in
+            // strictBest 时 score 优先级高于 inFlight：必须给最强号，
+            // 哪怕它被占用也接受（per-token semaphore 会排队，不会撞车）。
+            if strictBest {
+                let asc = scoreOf(a)
+                let bsc = scoreOf(b)
+                if asc != bsc { return asc > bsc }   // 高 score 优先
+            }
+
             let ai = inFlight[a.accountId] ?? 0
             let bi = inFlight[b.accountId] ?? 0
             if ai != bi { return ai < bi }

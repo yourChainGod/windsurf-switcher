@@ -154,6 +154,44 @@ final class PoolTests: XCTestCase {
         XCTAssertEqual(lease.accountId, "a")
     }
 
+    func testStrictBestIgnoresBucketAndLRU() async throws {
+        // 同桶（bucket=100）但 score 不同：
+        //   a: weekly=10 daily=10 → 1000+100+30+10 = 1140
+        //   b: weekly=10 daily=18 → 1000+100+30+18 = 1148
+        // 默认 lease（bucket=100）→ 桶相同走 LRU；a 没用过排在 b（lastUsed=200）之前 → 选 a
+        // strictBest=true → 必选 score 最高的 b（不分桶不看 LRU）
+        let pool = makePool(seeds: [
+            makeSeed(id: "a", daily: 10, weekly: 10),
+            makeSeed(id: "b", daily: 18, weekly: 10, lastUsed: 200),
+        ])
+        // 先验证默认行为：因 LRU 选 a
+        let l1 = try await pool.lease(cascadeId: nil, excludes: [], strictBest: false)
+        XCTAssertEqual(l1.accountId, "a", "non-strict bucket+LRU should pick a (never used)")
+
+        // strictBest 必给 b（score 最高）
+        let l2 = try await pool.lease(cascadeId: nil, excludes: [], strictBest: true)
+        XCTAssertEqual(l2.accountId, "b", "strictBest must pick highest score b")
+    }
+
+    func testStrictBestIgnoresInFlight() async throws {
+        // a: weekly=10 daily=10 → 1140
+        // b: weekly=10 daily=18 → 1148
+        // 占用 b 的并发槽，让默认 lease 转去 a；strictBest 仍坚持 b。
+        let cfg = PoolConfig(perTokenConcurrency: 2)
+        let pool = makePool(seeds: [
+            makeSeed(id: "a", daily: 10, weekly: 10),
+            makeSeed(id: "b", daily: 18, weekly: 10),
+        ], config: cfg)
+        // 先 lease b 一次，让 b 的 inFlight=1
+        _ = try await pool.lease(cascadeId: nil, excludes: ["a"], strictBest: false)
+        // 默认（bucket+inFlight）→ 选 inFlight=0 的 a
+        let l1 = try await pool.lease(cascadeId: nil, excludes: [], strictBest: false)
+        XCTAssertEqual(l1.accountId, "a", "non-strict prefers inFlight=0")
+        // strictBest 仍选 b（score 高）
+        let l2 = try await pool.lease(cascadeId: nil, excludes: [], strictBest: true)
+        XCTAssertEqual(l2.accountId, "b", "strictBest ignores inFlight, picks highest score")
+    }
+
     func testEqualScoreUsesLRU() async throws {
         // 都是 100/100 → 同 score。a 最近用过（lastUsed=200），b 没用过 → 选 b（LRU）
         let pool = makePool(seeds: [

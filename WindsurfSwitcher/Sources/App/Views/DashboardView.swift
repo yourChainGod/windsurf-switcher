@@ -20,14 +20,13 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 summaryCard
                 rpcStatsCard
                 recentRPCSection
-                Divider().opacity(0.3)
                 poolList
             }
-            .padding(10)
+            .padding(12)
         }
         .task {
             await state.syncPoolOnce()
@@ -38,22 +37,24 @@ struct DashboardView: View {
 
     private var summaryCard: some View {
         let h = state.poolHealth
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text("号 池 健 康")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                if h.drought {
-                    Text("⚠️ 枯竭模式")
-                        .font(.system(size: 10, weight: .semibold))
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Color.red.opacity(0.18))
-                        .foregroundStyle(.red)
-                        .clipShape(Capsule())
+        return cardShell(
+            title: "号池健康",
+            accent: h.drought ? .red : .cyan,
+            trailing: AnyView(
+                Group {
+                    if h.drought {
+                        droughtChip
+                    } else {
+                        Text("OK").font(.system(size: 10, weight: .semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.green.opacity(0.18))
+                            .foregroundStyle(.green)
+                            .clipShape(Capsule())
+                    }
                 }
-                Spacer()
-            }
-            HStack(spacing: 8) {
+            )
+        ) {
+            HStack(spacing: 6) {
                 statBig(label: "总数", value: "\(h.totalAccounts)")
                 statBig(label: "可用", value: "\(h.availableAccounts)", color: .green)
                 statBig(label: "冷却", value: "\(h.cooledAccounts)", color: .orange)
@@ -65,11 +66,19 @@ struct DashboardView: View {
                 )
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.secondary.opacity(0.06))
-        )
+    }
+
+    private var droughtChip: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 9))
+            Text("枯竭模式")
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(Color.red.opacity(0.18))
+        .foregroundStyle(.red)
+        .clipShape(Capsule())
     }
 
     // MARK: - RPC 计数卡
@@ -81,29 +90,39 @@ struct DashboardView: View {
             let r = Double(s.success) / Double(s.total) * 100
             return String(format: "%.1f%%", r)
         }()
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text("R P C 流 量")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("ticker · 5s 一刷")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-            }
-            HStack(spacing: 8) {
+        return cardShell(
+            title: "RPC 流量",
+            accent: rateColor(s),
+            trailing: AnyView(
+                HStack(spacing: 4) {
+                    pulseDot(active: s.lastMinuteCount > 0)
+                    Text("5s 同步")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+            )
+        ) {
+            HStack(spacing: 6) {
                 statBig(label: "累计", value: "\(s.total)")
                 statBig(label: "成功", value: "\(s.success)", color: .green)
-                statBig(label: "失败", value: "\(s.failure)", color: .red)
+                statBig(label: "失败", value: "\(s.failure)", color: s.failure > 0 ? .red : .secondary)
                 statBig(label: "成功率", value: successRate, color: rateColor(s))
                 statBig(label: "近 1m", value: "\(s.lastMinuteCount)", color: .blue)
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.secondary.opacity(0.06))
-        )
+    }
+
+    private func pulseDot(active: Bool) -> some View {
+        Circle()
+            .fill(active ? Color.green : Color.secondary.opacity(0.5))
+            .frame(width: 6, height: 6)
+            .overlay(
+                Circle()
+                    .stroke(active ? Color.green : Color.clear, lineWidth: 1)
+                    .scaleEffect(active ? 1.8 : 1)
+                    .opacity(active ? 0 : 0.5)
+                    .animation(active ? .easeOut(duration: 1.2).repeatForever(autoreverses: false) : .default, value: active)
+            )
     }
 
     // MARK: - 实时 RPC 列表
@@ -111,27 +130,19 @@ struct DashboardView: View {
     @ViewBuilder
     private var recentRPCSection: some View {
         let recent = state.statsSnapshot.recent
-        if recent.isEmpty {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("实 时 调 度")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                sectionTitle("实时调度")
                 Spacer()
-                Text("（暂无 RPC，等待 LS 调用）")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("实 时 调 度")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("最近 \(min(recent.count, 12)) / \(recent.count)")
+                if !recent.isEmpty {
+                    Text("\(min(recent.count, 12)) / \(recent.count)")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
+            }
+            if recent.isEmpty {
+                emptyHint(icon: "antenna.radiowaves.left.and.right", text: "暂无 RPC，等待 LS 调用…")
+            } else {
                 LazyVStack(spacing: 2) {
                     ForEach(Array(recent.prefix(12).enumerated()), id: \.offset) { _, rpc in
                         RPCRow(rpc: rpc)
@@ -145,22 +156,19 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var poolList: some View {
-        if state.poolSnapshot.isEmpty {
-            Text("（号池为空，等待同步…）")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .padding(8)
-        } else {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("号 池 排 行（按 score 降序）")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                sectionTitle("号池排行（按 score 降序）")
+                Spacer()
+                if !state.poolSnapshot.isEmpty {
                     Text("Top \(min(state.poolSnapshot.count, 10)) / \(state.poolSnapshot.count)")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
+            }
+            if state.poolSnapshot.isEmpty {
+                emptyHint(icon: "tray", text: "号池为空，等待同步…")
+            } else {
                 LazyVStack(spacing: 2) {
                     ForEach(Array(state.poolSnapshot.prefix(10)), id: \.accountId) { entry in
                         PoolEntryRow(snap: entry)
@@ -170,11 +178,75 @@ struct DashboardView: View {
         }
     }
 
+    // MARK: - card shell
+
+    @ViewBuilder
+    private func cardShell<Inner: View>(
+        title: String,
+        accent: Color,
+        trailing: AnyView? = nil,
+        @ViewBuilder content: () -> Inner
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(accent)
+                    .frame(width: 3, height: 12)
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                if let t = trailing { t }
+            }
+            content()
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(LinearGradient(
+                    colors: [accent.opacity(0.06), accent.opacity(0.02)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                ))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(accent.opacity(0.20), lineWidth: 0.7)
+        )
+    }
+
+    private func sectionTitle(_ s: String) -> some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.secondary.opacity(0.4))
+                .frame(width: 2, height: 9)
+            Text(s)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func emptyHint(icon: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 8).padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.04))
+        )
+    }
+
     // MARK: - helpers
 
     private func statBig(label: String, value: String, color: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.system(size: 16, weight: .semibold)).foregroundStyle(color)
+            Text(value).font(.system(size: 17, weight: .bold)).foregroundStyle(color)
             Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -190,7 +262,7 @@ struct DashboardView: View {
     }
 
     private func rateColor(_ s: StatsSnapshot) -> Color {
-        guard s.total > 0 else { return .primary }
+        guard s.total > 0 else { return .cyan }
         let r = Double(s.success) / Double(s.total)
         if r >= 0.9 { return .green }
         if r >= 0.6 { return .orange }
@@ -224,26 +296,28 @@ private struct RPCRow: View {
             Text("\(rpc.durationMillis)ms")
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .frame(width: 38, alignment: .trailing)
             Text(timeAgo)
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
-                .frame(width: 32, alignment: .trailing)
+                .frame(width: 28, alignment: .trailing)
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 7)
         .padding(.vertical, 3)
         .background(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: 5)
                 .fill(rowBg)
         )
     }
 
     private var statusPill: some View {
         Text("\(rpc.status)")
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .padding(.horizontal, 4).padding(.vertical, 1)
-            .background(statusColor.opacity(0.18))
+            .font(.system(size: 9, weight: .heavy, design: .monospaced))
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(statusColor.opacity(0.20))
             .foregroundStyle(statusColor)
             .clipShape(RoundedRectangle(cornerRadius: 3))
+            .frame(minWidth: 30)
     }
 
     private var statusColor: Color {
@@ -269,7 +343,6 @@ private struct RPCRow: View {
     }
 
     private var shortPath: String {
-        // 取 path 的最后一段（method 名）；保留 /__relay/ 等 system path 不动
         if rpc.path.hasPrefix("/__relay/") { return rpc.path }
         if let lastSlash = rpc.path.lastIndex(of: "/") {
             return String(rpc.path[rpc.path.index(after: lastSlash)...])
@@ -319,7 +392,7 @@ private struct PoolEntryRow: View {
             if let reason = snap.unavailableReason {
                 Text(reason)
                     .font(.system(size: 9, weight: .semibold))
-                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
                     .background(reason == "banned" ? Color.red.opacity(0.18) : Color.orange.opacity(0.18))
                     .foregroundStyle(reason == "banned" ? .red : .orange)
                     .clipShape(Capsule())

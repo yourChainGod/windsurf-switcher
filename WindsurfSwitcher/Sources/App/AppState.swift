@@ -61,6 +61,28 @@ public struct Toast: Identifiable, Equatable {
     public enum Kind: Equatable { case success, warning, error, info }
 }
 
+/// HeaderBar 顶条「当前激活号」展示信息。
+public struct ActiveAccountInfo: Equatable, Sendable {
+    public enum Source: String, Sendable { case recentRPC, poolBest }
+    public let email: String?
+    public let accountId: String
+    public let score: Int64
+    public let weeklyPercent: Int?
+    public let dailyPercent: Int?
+    public let inFlight: Int
+    public let lastRPCStatus: Int?
+    public let lastRPCAt: Date?
+    public let source: Source
+
+    /// 显示名：email local part；fallback accountId 前 8 位。
+    public var displayName: String {
+        if let e = email, let at = e.firstIndex(of: "@") {
+            return String(e[..<at])
+        }
+        return email ?? String(accountId.prefix(8))
+    }
+}
+
 @MainActor
 public final class AppState: ObservableObject {
     // MARK: Published state
@@ -300,6 +322,54 @@ public final class AppState: ObservableObject {
             else { a += 1 }
         }
         return (a, c, b)
+    }
+
+    /// 当前"激活号"——给 HeaderBar 顶条显示用。
+    /// 规则（优先级从高到低）：
+    ///   1. statsSnapshot.recent.first 的 accountId（最近一次 RPC 实际落到的号）
+    ///   2. poolSnapshot 第一个 unavailableReason==nil 的号（下一次 lease 最可能落到的）
+    ///   3. nil（号池为空/全冷却）
+    public var activeAccount: ActiveAccountInfo? {
+        let now = Int64(Date().timeIntervalSince1970)
+        // 1. 最近 RPC 命中的号（5min 内有效——超过就过期了）
+        if let rpc = statsSnapshot.recent.first,
+           let id = rpc.accountId,
+           now - Int64(rpc.timestamp.timeIntervalSince1970) <= 300 {
+            if let snap = poolSnapshot.first(where: { $0.accountId == id }) {
+                return ActiveAccountInfo(
+                    email: snap.email ?? rpc.email,
+                    accountId: id,
+                    score: snap.score,
+                    weeklyPercent: snap.weeklyPercent,
+                    dailyPercent: snap.dailyPercent,
+                    inFlight: snap.inFlight,
+                    lastRPCStatus: rpc.status,
+                    lastRPCAt: rpc.timestamp,
+                    source: .recentRPC
+                )
+            }
+            return ActiveAccountInfo(
+                email: rpc.email, accountId: id,
+                score: 0, weeklyPercent: nil, dailyPercent: nil, inFlight: 0,
+                lastRPCStatus: rpc.status, lastRPCAt: rpc.timestamp,
+                source: .recentRPC
+            )
+        }
+        // 2. 池里 score 最高的可用号（snapshot 已按 score 降序排）
+        if let best = poolSnapshot.first(where: { $0.unavailableReason == nil }) {
+            return ActiveAccountInfo(
+                email: best.email,
+                accountId: best.accountId,
+                score: best.score,
+                weeklyPercent: best.weeklyPercent,
+                dailyPercent: best.dailyPercent,
+                inFlight: best.inFlight,
+                lastRPCStatus: nil,
+                lastRPCAt: nil,
+                source: .poolBest
+            )
+        }
+        return nil
     }
 
     // MARK: Account ops

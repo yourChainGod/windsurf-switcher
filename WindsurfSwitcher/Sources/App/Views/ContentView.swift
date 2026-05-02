@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  App
 //
-//  根视图：顶部头条 + 三 tab 切换（Manage / Dashboard / Settings）。
+//  根视图：顶部头条 + 当前激活号条带 + 三 tab 切换（Manage / Dashboard / Settings）。
 //  关键：菜单栏 popover 内绝不用 .sheet —— sheet 触发 NSWindow 创建，
 //  会让 MenuBarExtra popover 失焦秒关。一律改 inline 视图栈。
 //
@@ -25,7 +25,8 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             HeaderBar(tab: $tab)
-            Divider()
+            ActiveAccountStrip()
+            Divider().opacity(0.4)
             Group {
                 switch tab {
                 case .manage:
@@ -45,23 +46,32 @@ struct ContentView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .background(
+            LinearGradient(
+                colors: [Color(.windowBackgroundColor), Color(.windowBackgroundColor).opacity(0.85)],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
     }
 }
+
+// MARK: - HeaderBar
 
 private struct HeaderBar: View {
     @EnvironmentObject var state: AppState
     @Binding var tab: AppTab
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             // 左：图标 + 标题
             ZStack {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 7)
                     .fill(LinearGradient(
                         colors: [.cyan, .indigo],
                         startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: 26, height: 26)
-                Text("WS").font(.system(size: 11, weight: .bold)).foregroundColor(.white)
+                    .frame(width: 28, height: 28)
+                    .shadow(color: .indigo.opacity(0.35), radius: 3, x: 0, y: 1)
+                Text("WS").font(.system(size: 11, weight: .heavy)).foregroundColor(.white)
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(tabTitle).font(.system(size: 13, weight: .semibold))
@@ -72,67 +82,43 @@ private struct HeaderBar: View {
 
             // addToken 子页：只显示返回按钮
             if tab == .addToken {
-                Button {
-                    tab = .manage
-                } label: {
-                    Image(systemName: "chevron.left").font(.system(size: 13))
-                }
-                .buttonStyle(.borderless)
-                .help("返回账号列表")
+                IconButton(systemName: "chevron.left", help: "返回账号列表") { tab = .manage }
             } else {
                 if tab == .manage {
-                    Button {
-                        tab = .addToken
-                    } label: {
-                        Image(systemName: "plus").font(.system(size: 13))
-                    }
-                    .buttonStyle(.borderless)
-                    .help("添加 token")
-
-                    Button {
+                    IconButton(systemName: "plus", help: "添加 token") { tab = .addToken }
+                    IconButton(
+                        systemName: state.loading ? "" : "arrow.clockwise",
+                        help: "刷新全部",
+                        progress: state.loading,
+                        disabled: state.loading
+                    ) {
                         Task { await state.refreshAllVisible() }
-                    } label: {
-                        if state.loading {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.clockwise").font(.system(size: 13))
-                        }
                     }
-                    .buttonStyle(.borderless)
-                    .help("刷新全部")
-                    .disabled(state.loading)
                 }
 
                 if tab == .dashboard {
-                    // 调度中心：手动同步按钮（强调实时感）
-                    Button {
+                    IconButton(systemName: "arrow.triangle.2.circlepath", help: "立即同步号池") {
                         Task { await state.syncPoolOnce() }
-                    } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 13))
                     }
-                    .buttonStyle(.borderless)
-                    .help("立即同步号池")
                 }
 
-                // 调度中心 / 账号 切换（dashboard 是默认页，按钮高亮表达"切到账号管理"）
-                Button {
+                IconButton(
+                    systemName: tab == .dashboard ? "person.2" : "chart.line.uptrend.xyaxis",
+                    help: tab == .dashboard ? "账号管理" : "调度中心"
+                ) {
                     tab = (tab == .dashboard ? .manage : .dashboard)
-                } label: {
-                    Image(systemName: tab == .dashboard ? "person.2" : "chart.line.uptrend.xyaxis")
-                        .font(.system(size: 13))
                 }
-                .buttonStyle(.borderless)
-                .help(tab == .dashboard ? "账号管理" : "调度中心")
 
-                Button { tab = (tab == .settings ? .dashboard : .settings) } label: {
-                    Image(systemName: "gearshape").font(.system(size: 13))
+                IconButton(
+                    systemName: "gearshape",
+                    help: tab == .settings ? "返回调度中心" : "设置"
+                ) {
+                    tab = (tab == .settings ? .dashboard : .settings)
                 }
-                .buttonStyle(.borderless)
-                .help(tab == .settings ? "返回调度中心" : "设置")
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
     }
 
     private var tabTitle: String {
@@ -153,6 +139,175 @@ private struct HeaderBar: View {
         }
     }
 }
+
+// MARK: - 当前激活号条带
+
+/// HeaderBar 下方常驻条：实时显示"当前激活号"——
+/// 优先最近 RPC 落到的账号；否则池里 score 最高的可用号。
+private struct ActiveAccountStrip: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let info = state.activeAccount {
+                statusDot(for: info)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(info.displayName)
+                            .font(.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                        sourceBadge(info.source)
+                    }
+                    HStack(spacing: 6) {
+                        if let w = info.weeklyPercent {
+                            Text("W \(w)%").foregroundStyle(quotaColor(w))
+                        }
+                        if let d = info.dailyPercent {
+                            Text("D \(d)%").foregroundStyle(quotaColor(d))
+                        }
+                        Text("score \(info.score)").foregroundStyle(.secondary)
+                        if info.inFlight > 0 {
+                            Text("⇋\(info.inFlight)").foregroundStyle(.blue)
+                        }
+                    }
+                    .font(.system(size: 9, design: .monospaced))
+                }
+                Spacer()
+                if let status = info.lastRPCStatus, let at = info.lastRPCAt {
+                    rpcPill(status: status, at: at)
+                }
+            } else {
+                Image(systemName: "moon.zzz")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11))
+                Text("待 LS 调用 · 号池就绪后自动激活")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            LinearGradient(
+                colors: stripColors(),
+                startPoint: .leading, endPoint: .trailing
+            )
+        )
+    }
+
+    private func stripColors() -> [Color] {
+        guard let info = state.activeAccount else {
+            return [Color.secondary.opacity(0.06), Color.secondary.opacity(0.03)]
+        }
+        if let s = info.lastRPCStatus {
+            switch s {
+            case 200..<300: return [Color.green.opacity(0.10), Color.green.opacity(0.03)]
+            case 401, 403: return [Color.red.opacity(0.12), Color.red.opacity(0.03)]
+            case 429: return [Color.orange.opacity(0.12), Color.orange.opacity(0.03)]
+            case 400..<600: return [Color.orange.opacity(0.10), Color.orange.opacity(0.03)]
+            default: break
+            }
+        }
+        return [Color.cyan.opacity(0.08), Color.indigo.opacity(0.04)]
+    }
+
+    private func statusDot(for info: ActiveAccountInfo) -> some View {
+        let color: Color = {
+            if let s = info.lastRPCStatus {
+                switch s {
+                case 200..<300: return .green
+                case 401, 403: return .red
+                case 429: return .orange
+                default: return .yellow
+                }
+            }
+            return .blue
+        }()
+        return Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .overlay(Circle().stroke(color.opacity(0.35), lineWidth: 2.5).blur(radius: 1))
+    }
+
+    private func sourceBadge(_ src: ActiveAccountInfo.Source) -> some View {
+        let label = src == .recentRPC ? "活跃" : "待命"
+        let bg: Color = src == .recentRPC ? .green : .blue
+        return Text(label)
+            .font(.system(size: 8, weight: .semibold))
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .background(bg.opacity(0.18))
+            .foregroundStyle(bg)
+            .clipShape(Capsule())
+    }
+
+    private func rpcPill(status: Int, at: Date) -> some View {
+        let color: Color = {
+            switch status {
+            case 200..<300: return .green
+            case 401, 403: return .red
+            case 429: return .orange
+            default: return .secondary
+            }
+        }()
+        let secsAgo = Int(-at.timeIntervalSinceNow)
+        let ago = secsAgo < 60 ? "\(secsAgo)s" : "\(secsAgo / 60)m"
+        return HStack(spacing: 3) {
+            Text("\(status)")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(color)
+            Text(ago)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 5).padding(.vertical, 1)
+        .background(color.opacity(0.12))
+        .clipShape(Capsule())
+    }
+
+    private func quotaColor(_ p: Int) -> Color {
+        switch p {
+        case ..<5: return .red
+        case 5..<20: return .orange
+        default: return .primary
+        }
+    }
+}
+
+// MARK: - IconButton（统一样式）
+
+private struct IconButton: View {
+    let systemName: String
+    let help: String
+    var progress: Bool = false
+    var disabled: Bool = false
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if progress {
+                    ProgressView().controlSize(.small)
+                } else if !systemName.isEmpty {
+                    Image(systemName: systemName).font(.system(size: 12))
+                }
+            }
+            .frame(width: 24, height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(hovering ? Color.secondary.opacity(0.15) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .disabled(disabled)
+        .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - Toast
 
 private struct ToastBar: View {
     let toast: Toast

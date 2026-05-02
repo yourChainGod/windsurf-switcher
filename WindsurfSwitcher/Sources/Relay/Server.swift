@@ -356,6 +356,10 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
         // cascadeId 在 cascade :42201 启用后从请求 header 提取；当前 phase 全 nil
         let cascadeId: String? = nil
 
+        // GetUserJwt 是"播种"调用：LS 拿到 JWT 后会缓存使用，必须给真正最强号。
+        // → strictBest=true 触发 score 优先排序（不分桶、忽略 inFlight、忽略 sticky）。
+        let isGetUserJwt = head.uri.contains("/exa.auth_pb.AuthService/GetUserJwt")
+
         Task {
             var excludes: [String] = []
             var lastError: Error?
@@ -365,7 +369,11 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
             for attempt in 1...HTTPProxyHandler.maxAttempts {
                 let lease: Lease
                 do {
-                    lease = try await pool.lease(cascadeId: cascadeId, excludes: excludes)
+                    lease = try await pool.lease(
+                        cascadeId: cascadeId,
+                        excludes: excludes,
+                        strictBest: isGetUserJwt
+                    )
                 } catch let err {
                     lastError = err
                     // 没号可用：用 last good 兜底，否则 502
