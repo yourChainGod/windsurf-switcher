@@ -88,5 +88,10 @@ let package = Package(
             dependencies: ["Wrapper", "Core"],
             path: "Tests/WrapperTests"
         ),
+        .testTarget(
+            name: "RelayTests",
+            dependencies: ["Relay"],
+            path: "Tests/RelayTests"
+        ),
     ]
 )

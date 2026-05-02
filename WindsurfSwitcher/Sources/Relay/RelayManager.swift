@@ -38,19 +38,22 @@ public actor RelayManager {
     private let logger: Logger
 
     public let config: RelayConfig
+    /// 调度中心：Pool actor（号池）。
+    public let pool: Pool
 
     private var apiInstance: RelayInstance?
     private var inferenceInstance: RelayInstance?
 
-    public init(config: RelayConfig = .default) {
+    public init(config: RelayConfig = .default, poolConfig: PoolConfig = .default) {
         self.config = config
-        // singleton group + HTTPClient.shared：库自管生命周期，不会被 deinit 误关
         self.group = MultiThreadedEventLoopGroup.singleton
         self.httpClient = HTTPClient.shared
         self.logger = Logger(label: "wss.relay.manager")
+        self.pool = Pool(config: poolConfig)
     }
 
-    /// 启动 api + inference 两个明文 relay。Phase 2-A 不启 cascade。
+    /// 启动 api + inference 两个明文 relay，并把 Pool 关联到 api 实例（让其
+    /// 内部端点 /__relay/health + /__relay/pool 暴露调度中心快照）。
     public func start() async throws {
         if apiInstance == nil {
             let cfg = RelayInstanceConfig(
@@ -60,7 +63,8 @@ public actor RelayManager {
                 upstreamBase: config.apiUpstreamBase
             )
             apiInstance = try await RelayServer.start(
-                config: cfg, group: group, httpClient: httpClient, logger: logger
+                config: cfg, group: group, httpClient: httpClient,
+                pool: pool, logger: logger
             )
         }
         if inferenceInstance == nil {
@@ -71,7 +75,8 @@ public actor RelayManager {
                 upstreamBase: config.inferenceUpstreamBase
             )
             inferenceInstance = try await RelayServer.start(
-                config: cfg, group: group, httpClient: httpClient, logger: logger
+                config: cfg, group: group, httpClient: httpClient,
+                pool: pool, logger: logger
             )
         }
     }
@@ -99,6 +104,19 @@ public actor RelayManager {
 
     public var apiStats: RelayStats? { apiInstance?.stats }
     public var inferenceStats: RelayStats? { inferenceInstance?.stats }
+
+    /// 同步外部账号列表到 Pool（5s ticker 调用）。
+    public func syncPool(_ seeds: [PoolAccountSeed]) async {
+        await pool.replaceAccounts(seeds)
+    }
+
+    public func poolSnapshot() async -> [EntrySnapshot] {
+        await pool.snapshot()
+    }
+
+    public func poolHealth() async -> HealthSummary {
+        await pool.healthSummary()
+    }
 
     // 不写 deinit：singleton group + HTTPClient.shared 由库自管。
 }

@@ -78,6 +78,16 @@ public final class AppState: ObservableObject {
     @Published public var wrapperStatuses: [WindsurfApp: WrapperStatus] = [:]
     @Published public var wrapperBusy: Bool = false
 
+    // Phase 3-A：调度中心快照
+    @Published public var poolSnapshot: [EntrySnapshot] = []
+    @Published public var poolHealth: HealthSummary = HealthSummary(
+        drought: false, droughtThreshold: 5, totalAccounts: 0,
+        availableAccounts: 0, cooledAccounts: 0, bannedAccounts: 0,
+        lowestWeeklyPercent: nil, lowestDailyPercent: nil
+    )
+
+    private var poolSyncTask: Task<Void, Never>?
+
     // MARK: Backing services
 
     private var store: AccountStore?
@@ -139,6 +149,51 @@ public final class AppState: ObservableObject {
 
         // 6. 检测 wrapper 状态
         refreshWrapperStatuses()
+
+        // 7. 启动 Pool 同步 ticker：每 5s 把 store accounts → Pool
+        startPoolSyncTicker()
+    }
+
+    /// 5s ticker：把 store 当前账号集合同步到 Pool（race-safe merge）。
+    /// 第一次同步立即触发。
+    private func startPoolSyncTicker() {
+        FileHandle.standardError.write(Data("[wss] startPoolSyncTicker called\n".utf8))
+        poolSyncTask?.cancel()
+        poolSyncTask = Task { @MainActor in
+            FileHandle.standardError.write(Data("[wss] poolSyncTask body started\n".utf8))
+            await self.syncPoolOnce()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if Task.isCancelled { break }
+                await self.syncPoolOnce()
+            }
+        }
+    }
+
+    public func syncPoolOnce() async {
+        let seeds = accounts.map { acc -> PoolAccountSeed in
+            PoolAccountSeed(
+                id: acc.id.uuidString,
+                sessionToken: acc.sessionToken,
+                email: acc.jwtInfo?.email,
+                dailyPercent: acc.planStatus?.dailyPercent,
+                weeklyPercent: acc.planStatus?.weeklyPercent,
+                cooldownUntil: acc.cooldownUntil.map { Int64($0.timeIntervalSince1970) },
+                consecutiveFailures: acc.consecutiveFailures,
+                lastUsedByRelay: acc.lastUsedByRelay.map { Int64($0.timeIntervalSince1970) },
+                internalErrorStreak: acc.internalErrorStreak,
+                banSignalCount: acc.banSignalCount,
+                banSignalFirstAt: acc.banSignalFirstAt.map { Int64($0.timeIntervalSince1970) },
+                bannedUntil: acc.bannedUntil.map { Int64($0.timeIntervalSince1970) }
+            )
+        }
+        FileHandle.standardError.write(Data("[wss] syncPoolOnce: feeding \(seeds.count) seeds to Pool\n".utf8))
+        await relayManager.syncPool(seeds)
+        let snap = await relayManager.poolSnapshot()
+        let health = await relayManager.poolHealth()
+        FileHandle.standardError.write(Data("[wss] syncPoolOnce: pool now has \(snap.count) entries; health.total=\(health.totalAccounts)\n".utf8))
+        self.poolSnapshot = snap
+        self.poolHealth = health
     }
 
     /// 重新扫描 stable + next 的 wrapper 状态。
@@ -344,6 +399,7 @@ public final class AppState: ObservableObject {
 
     public func quit() {
         quotaTickerTask?.cancel()
+        poolSyncTask?.cancel()
         Task {
             await relayManager.stop()
             #if canImport(AppKit)

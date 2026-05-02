@@ -9,6 +9,7 @@ import SwiftUI
 
 enum AppTab: String, CaseIterable {
     case manage
+    case dashboard
     case settings
 }
 
@@ -25,6 +26,8 @@ struct ContentView: View {
                 switch tab {
                 case .manage:
                     ManageView(showAdd: $showAdd)
+                case .dashboard:
+                    DashboardView()
                 case .settings:
                     SettingsView()
                 }
@@ -60,11 +63,8 @@ private struct HeaderBar: View {
                 Text("WS").font(.system(size: 11, weight: .bold)).foregroundColor(.white)
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text(tab == .manage ? "账号" : "设置")
-                    .font(.system(size: 13, weight: .semibold))
-                Text(tab == .manage ? "Stable + Next 共享池" : "preferences")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                Text(tabTitle).font(.system(size: 13, weight: .semibold))
+                Text(tabSubtitle).font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
             Spacer()
@@ -90,6 +90,14 @@ private struct HeaderBar: View {
                 .disabled(state.loading)
             }
 
+            Button {
+                tab = (tab == .dashboard ? .manage : .dashboard)
+            } label: {
+                Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 13))
+            }
+            .buttonStyle(.borderless)
+            .help(tab == .dashboard ? "返回账号" : "调度中心")
+
             Button { tab = (tab == .settings ? .manage : .settings) } label: {
                 Image(systemName: "gearshape").font(.system(size: 13))
             }
@@ -98,6 +106,22 @@ private struct HeaderBar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+
+    private var tabTitle: String {
+        switch tab {
+        case .manage: return "账号"
+        case .dashboard: return "调度中心"
+        case .settings: return "设置"
+        }
+    }
+
+    private var tabSubtitle: String {
+        switch tab {
+        case .manage: return "Stable + Next 共享池"
+        case .dashboard: return "Pool · Health · Snapshot"
+        case .settings: return "preferences"
+        }
     }
 }
 

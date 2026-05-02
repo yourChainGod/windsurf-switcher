@@ -45,6 +45,9 @@ public struct RelayInstanceConfig: Sendable {
 public final class RelayInstance: @unchecked Sendable {
     public let config: RelayInstanceConfig
     public let stats: RelayStats
+    /// 可选 Pool 引用：内部端点 /__relay/pool / /__relay/health 用来暴露快照。
+    /// nil 表示该 relay 实例不参与 Pool 调度（仅透明代理）。
+    public let pool: Pool?
     private let group: any EventLoopGroup
     private let httpClient: HTTPClient
     private let channel: Channel
@@ -56,6 +59,7 @@ public final class RelayInstance: @unchecked Sendable {
         httpClient: HTTPClient,
         channel: Channel,
         stats: RelayStats,
+        pool: Pool?,
         logger: Logger
     ) {
         self.config = config
@@ -63,6 +67,7 @@ public final class RelayInstance: @unchecked Sendable {
         self.httpClient = httpClient
         self.channel = channel
         self.stats = stats
+        self.pool = pool
         self.logger = logger
     }
 
@@ -84,6 +89,7 @@ public enum RelayServer {
         group: any EventLoopGroup,
         httpClient: HTTPClient,
         stats: RelayStats? = nil,
+        pool: Pool? = nil,
         logger: Logger? = nil
     ) async throws -> RelayInstance {
         let log = logger ?? Logger(label: "wss.relay.\(config.name)")
@@ -99,6 +105,7 @@ public enum RelayServer {
                         config: config,
                         httpClient: httpClient,
                         stats: st,
+                        pool: pool,
                         logger: log
                     )
                     return channel.pipeline.addHandler(handler)
@@ -114,6 +121,7 @@ public enum RelayServer {
             httpClient: httpClient,
             channel: channel,
             stats: st,
+            pool: pool,
             logger: log
         )
     }
@@ -130,6 +138,7 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
     private let config: RelayInstanceConfig
     private let httpClient: HTTPClient
     private let stats: RelayStats
+    private let pool: Pool?
     private let logger: Logger
 
     // 单连接 keep-alive 上下游帧汇聚
@@ -137,10 +146,11 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
     private var requestBody: ByteBuffer?
     private var keepAlive = true
 
-    init(config: RelayInstanceConfig, httpClient: HTTPClient, stats: RelayStats, logger: Logger) {
+    init(config: RelayInstanceConfig, httpClient: HTTPClient, stats: RelayStats, pool: Pool?, logger: Logger) {
         self.config = config
         self.httpClient = httpClient
         self.stats = stats
+        self.pool = pool
         self.logger = logger
     }
 
@@ -186,7 +196,7 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
             let payload: [String: Any]
             switch path {
             case "/__relay/health":
-                payload = [
+                var body: [String: Any] = [
                     "ok": true,
                     "name": config.name,
                     "host": config.host,
@@ -199,6 +209,19 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                         "lastMinute": snap.lastMinuteCount,
                     ],
                 ]
+                if let pool = self.pool {
+                    let h = await pool.healthSummary()
+                    body["pool"] = [
+                        "drought": h.drought,
+                        "total": h.totalAccounts,
+                        "available": h.availableAccounts,
+                        "cooled": h.cooledAccounts,
+                        "banned": h.bannedAccounts,
+                        "lowestWeeklyPercent": h.lowestWeeklyPercent ?? -1,
+                        "lowestDailyPercent": h.lowestDailyPercent ?? -1,
+                    ]
+                }
+                payload = body
             case "/__relay/stats":
                 payload = [
                     "total": snap.total,
@@ -214,6 +237,31 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                         ]
                     },
                 ]
+            case "/__relay/pool":
+                if let pool = self.pool {
+                    let entries = await pool.snapshot()
+                    payload = [
+                        "size": entries.count,
+                        "entries": entries.map { e -> [String: Any] in
+                            [
+                                "id": e.accountId,
+                                "email": e.email ?? NSNull(),
+                                "score": e.score,
+                                "daily": e.dailyPercent ?? NSNull(),
+                                "weekly": e.weeklyPercent ?? NSNull(),
+                                "inFlight": e.inFlight,
+                                "lastUsed": e.lastUsedAt ?? NSNull(),
+                                "cooldownUntil": e.cooldownUntil ?? NSNull(),
+                                "consecutiveFailures": e.consecutiveFailures,
+                                "internalErrorStreak": e.internalErrorStreak,
+                                "bannedUntil": e.bannedUntil ?? NSNull(),
+                                "unavailableReason": e.unavailableReason ?? NSNull(),
+                            ]
+                        },
+                    ]
+                } else {
+                    payload = ["error": "pool not attached to this relay"]
+                }
             default:
                 payload = ["error": "unknown internal path \(path)"]
             }
