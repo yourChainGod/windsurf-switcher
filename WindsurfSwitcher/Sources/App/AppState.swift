@@ -13,6 +13,8 @@ import SwiftUI
 import Core
 import WindsurfClient
 import External
+import Wrapper
+import Relay
 
 /// UI 顶部 segmented control 的过滤维度。
 public enum AppFilter: String, CaseIterable, Identifiable, Sendable {
@@ -71,6 +73,11 @@ public final class AppState: ObservableObject {
     @Published public var refreshingIds: Set<UUID> = []
     @Published public var switchingIds: Set<UUID> = []
 
+    // Phase 2-A 新增
+    @Published public var relayStatus: RelayManagerStatus = RelayManagerStatus()
+    @Published public var wrapperStatuses: [WindsurfApp: WrapperStatus] = [:]
+    @Published public var wrapperBusy: Bool = false
+
     // MARK: Backing services
 
     private var store: AccountStore?
@@ -78,7 +85,14 @@ public final class AppState: ObservableObject {
     private let planClient = GetPlanStatusClient()
     private var quotaTickerTask: Task<Void, Never>?
 
-    public init() {}
+    public let relayConfig: RelayConfig
+    public let relayManager: RelayManager
+
+    public init() {
+        let cfg = RelayConfig.default
+        self.relayConfig = cfg
+        self.relayManager = RelayManager(config: cfg)
+    }
 
     // MARK: Lifecycle
 
@@ -114,6 +128,75 @@ public final class AppState: ObservableObject {
 
         // 4. 后台定时刷新 quota（每 5min 一轮，每轮挑 8 号串行）
         startQuotaTicker()
+
+        // 5. 启动 relay（api + inference 明文端口；cascade 留 Phase 2-B）
+        do {
+            try await relayManager.start()
+            self.relayStatus = await relayManager.status()
+        } catch {
+            self.toast = Toast(kind: .error, text: "Relay 启动失败：\(error)")
+        }
+
+        // 6. 检测 wrapper 状态
+        refreshWrapperStatuses()
+    }
+
+    /// 重新扫描 stable + next 的 wrapper 状态。
+    public func refreshWrapperStatuses() {
+        var map: [WindsurfApp: WrapperStatus] = [:]
+        for app in WindsurfApp.allCases {
+            let w = Wrapper(
+                app: app,
+                relayPort: relayConfig.apiBindPort,
+                inferencePort: relayConfig.inferenceBindPort
+            )
+            map[app] = w.status()
+        }
+        self.wrapperStatuses = map
+    }
+
+    /// 一次性给两个 app 装 wrapper（osascript 弹一次密码框）。
+    public func installAllWrappers() async {
+        wrapperBusy = true
+        defer { wrapperBusy = false }
+        do {
+            _ = try await Task.detached { [config = relayConfig] in
+                try Wrapper.installBoth(
+                    relayPort: config.apiBindPort,
+                    inferencePort: config.inferenceBindPort
+                )
+            }.value
+            refreshWrapperStatuses()
+            self.toast = Toast(kind: .success, text: "已安装 wrapper")
+        } catch {
+            refreshWrapperStatuses()
+            self.toast = Toast(kind: .error, text: "安装失败：\(error)")
+        }
+    }
+
+    /// 卸载指定 app 的 wrapper（恢复原 LS binary）。
+    public func uninstallWrapper(_ app: WindsurfApp) async {
+        wrapperBusy = true
+        defer { wrapperBusy = false }
+        do {
+            let w = Wrapper(
+                app: app,
+                relayPort: relayConfig.apiBindPort,
+                inferencePort: relayConfig.inferenceBindPort
+            )
+            _ = try await Task.detached { [w] in
+                try w.uninstall()
+            }.value
+            refreshWrapperStatuses()
+            self.toast = Toast(kind: .success, text: "已卸载 \(app.displayName) wrapper")
+        } catch {
+            refreshWrapperStatuses()
+            self.toast = Toast(kind: .error, text: "卸载失败：\(error)")
+        }
+    }
+
+    public func refreshRelayStatus() async {
+        self.relayStatus = await relayManager.status()
     }
 
     /// 从 store 重新加载账号列表。按 lastSwitchedAt / addedAt 倒序。
@@ -261,11 +344,14 @@ public final class AppState: ObservableObject {
 
     public func quit() {
         quotaTickerTask?.cancel()
-        #if canImport(AppKit)
-        NSApplication.shared.terminate(nil)
-        #else
-        exit(0)
-        #endif
+        Task {
+            await relayManager.stop()
+            #if canImport(AppKit)
+            await MainActor.run { NSApplication.shared.terminate(nil) }
+            #else
+            exit(0)
+            #endif
+        }
     }
 
     // MARK: Quota ticker
