@@ -499,7 +499,7 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                         await s.apply(upd)
                     }
                     let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
-                    await stats.record(RecentRPC(path: head.uri, status: statusCode, durationMillis: Int(elapsed)))
+                    await stats.record(RecentRPC(path: head.uri, accountId: accountId, email: lease.email, status: statusCode, durationMillis: Int(elapsed)))
                     await Self.writeBack(channel: channel, eventLoop: eventLoop, status: resp.status, headers: respHeaders, body: respBytes, keepAlive: self.keepAlive)
                     return
                 } catch let err {
@@ -592,7 +592,15 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             eventLoop.execute {
                 var outHeaders = HTTPHeaders()
-                let hopByHop: Set<String> = ["transfer-encoding", "connection", "keep-alive", "trailer"]
+                // 关键：AsyncHTTPClient.shared 默认 decompression=.enabled，
+                // 收到 content-encoding: gzip/br/deflate 的响应会自动解压 body。
+                // 此时若把原 content-encoding 头透传，LS 会试图再解一次 →
+                // "gzip: invalid header"。必须把 content-encoding 也当 hop-by-hop 剥掉。
+                // content-length 反正下面会按"已解压字节数"重设，不能透传。
+                let hopByHop: Set<String> = [
+                    "transfer-encoding", "connection", "keep-alive", "trailer",
+                    "content-encoding", "content-length",
+                ]
                 for (n, v) in headers {
                     if hopByHop.contains(n.lowercased()) { continue }
                     outHeaders.add(name: n, value: v)

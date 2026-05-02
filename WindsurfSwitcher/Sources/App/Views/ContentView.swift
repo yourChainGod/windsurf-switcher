@@ -18,7 +18,9 @@ enum AppTab: String, CaseIterable {
 
 struct ContentView: View {
     @EnvironmentObject var state: AppState
-    @State private var tab: AppTab = .manage
+    /// 默认进调度中心——它是核心：池快照 / 健康 / 实时 RPC。
+    /// 账号管理是次级（管理操作才需要切过去）。
+    @State private var tab: AppTab = .dashboard
 
     var body: some View {
         VStack(spacing: 0) {
@@ -101,19 +103,32 @@ private struct HeaderBar: View {
                     .disabled(state.loading)
                 }
 
+                if tab == .dashboard {
+                    // 调度中心：手动同步按钮（强调实时感）
+                    Button {
+                        Task { await state.syncPoolOnce() }
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 13))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("立即同步号池")
+                }
+
+                // 调度中心 / 账号 切换（dashboard 是默认页，按钮高亮表达"切到账号管理"）
                 Button {
                     tab = (tab == .dashboard ? .manage : .dashboard)
                 } label: {
-                    Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 13))
+                    Image(systemName: tab == .dashboard ? "person.2" : "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 13))
                 }
                 .buttonStyle(.borderless)
-                .help(tab == .dashboard ? "返回账号" : "调度中心")
+                .help(tab == .dashboard ? "账号管理" : "调度中心")
 
-                Button { tab = (tab == .settings ? .manage : .settings) } label: {
+                Button { tab = (tab == .settings ? .dashboard : .settings) } label: {
                     Image(systemName: "gearshape").font(.system(size: 13))
                 }
                 .buttonStyle(.borderless)
-                .help(tab == .settings ? "返回账号" : "设置")
+                .help(tab == .settings ? "返回调度中心" : "设置")
             }
         }
         .padding(.horizontal, 12)
@@ -122,7 +137,7 @@ private struct HeaderBar: View {
 
     private var tabTitle: String {
         switch tab {
-        case .manage: return "账号"
+        case .manage: return "账号管理"
         case .dashboard: return "调度中心"
         case .settings: return "设置"
         case .addToken: return "添加 Token"
@@ -131,8 +146,8 @@ private struct HeaderBar: View {
 
     private var tabSubtitle: String {
         switch tab {
-        case .manage: return "Stable + Next 共享池"
-        case .dashboard: return "Pool · Health · Snapshot"
+        case .manage: return "添加 / 删除 / 重命名 / 切号"
+        case .dashboard: return "号池 · 健康 · 实时 RPC"
         case .settings: return "preferences"
         case .addToken: return "粘贴 devin-session-token"
         }

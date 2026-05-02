@@ -85,6 +85,10 @@ public final class AppState: ObservableObject {
         availableAccounts: 0, cooledAccounts: 0, bannedAccounts: 0,
         lowestWeeklyPercent: nil, lowestDailyPercent: nil
     )
+    /// Phase 4：合并 api+inference 两路的实时 RPC stats（5s 一刷，与 pool 同 ticker）。
+    @Published public var statsSnapshot: StatsSnapshot = StatsSnapshot(
+        total: 0, success: 0, failure: 0, lastMinuteCount: 0, recent: []
+    )
 
     private var poolSyncTask: Task<Void, Never>?
 
@@ -207,9 +211,11 @@ public final class AppState: ObservableObject {
         await relayManager.syncPool(seeds)
         let snap = await relayManager.poolSnapshot()
         let health = await relayManager.poolHealth()
-        FileHandle.standardError.write(Data("[wss] syncPoolOnce: pool now has \(snap.count) entries; health.total=\(health.totalAccounts)\n".utf8))
+        let stats = await relayManager.combinedStatsSnapshot()
+        FileHandle.standardError.write(Data("[wss] syncPoolOnce: pool=\(snap.count) total=\(health.totalAccounts) rpc.total=\(stats.total) rpc.lastmin=\(stats.lastMinuteCount)\n".utf8))
         self.poolSnapshot = snap
         self.poolHealth = health
+        self.statsSnapshot = stats
     }
 
     /// 重新扫描 stable + next 的 wrapper 状态。

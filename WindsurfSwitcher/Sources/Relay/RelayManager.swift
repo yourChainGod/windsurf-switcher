@@ -111,6 +111,24 @@ public actor RelayManager {
     public var apiStats: RelayStats? { apiInstance?.stats }
     public var inferenceStats: RelayStats? { inferenceInstance?.stats }
 
+    /// 拼合 api + inference 两路 stats 给 Dashboard 用。
+    public func combinedStatsSnapshot() async -> StatsSnapshot {
+        let apiSnap = await apiInstance?.stats.snapshot()
+        let infSnap = await inferenceInstance?.stats.snapshot()
+        let total = (apiSnap?.total ?? 0) + (infSnap?.total ?? 0)
+        let success = (apiSnap?.success ?? 0) + (infSnap?.success ?? 0)
+        let failure = (apiSnap?.failure ?? 0) + (infSnap?.failure ?? 0)
+        let lastMin = (apiSnap?.lastMinuteCount ?? 0) + (infSnap?.lastMinuteCount ?? 0)
+        // 合并 recent 并按时间倒序
+        var recent = (apiSnap?.recent ?? []) + (infSnap?.recent ?? [])
+        recent.sort { $0.timestamp > $1.timestamp }
+        if recent.count > 50 { recent = Array(recent.prefix(50)) }
+        return StatsSnapshot(
+            total: total, success: success, failure: failure,
+            lastMinuteCount: lastMin, recent: recent
+        )
+    }
+
     /// 同步外部账号列表到 Pool（5s ticker 调用）。
     public func syncPool(_ seeds: [PoolAccountSeed]) async {
         await pool.replaceAccounts(seeds)

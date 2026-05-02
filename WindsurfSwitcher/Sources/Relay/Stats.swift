@@ -42,6 +42,20 @@ public struct StatsSnapshot: Sendable, Equatable {
     public let failure: UInt64
     public let lastMinuteCount: UInt64
     public let recent: [RecentRPC]
+
+    public init(
+        total: UInt64,
+        success: UInt64,
+        failure: UInt64,
+        lastMinuteCount: UInt64,
+        recent: [RecentRPC]
+    ) {
+        self.total = total
+        self.success = success
+        self.failure = failure
+        self.lastMinuteCount = lastMinuteCount
+        self.recent = recent
+    }
 }
 
 public actor RelayStats {

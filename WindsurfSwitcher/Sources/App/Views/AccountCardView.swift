@@ -20,6 +20,8 @@ struct AccountCardView: View {
     @State private var deleteTimer: Timer?
     @State private var renaming = false
     @State private var renameDraft = ""
+    /// 长 lastError 默认折叠 — 点 "详情" 才展开。避免 401 长串污染列表。
+    @State private var errorExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -65,10 +67,7 @@ struct AccountCardView: View {
                     .foregroundStyle(.red)
             }
             if let err = account.lastError {
-                Text(err)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
+                errorRow(err)
             }
         }
         .padding(8)
@@ -83,6 +82,62 @@ struct AccountCardView: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { handleTap() }
+    }
+
+    /// 错误信息：默认折叠成单行 "⚠ 配额刷新失败"，点 "详情" 展开看全文。
+    /// 长 401 unauthenticated body 不再红字大显眼，避免污染列表观感。
+    @ViewBuilder
+    private func errorRow(_ err: String) -> some View {
+        let summary: String = {
+            if err.localizedCaseInsensitiveContains("unauthenticated")
+                || err.localizedCaseInsensitiveContains("invalid token") {
+                return "Token 失效"
+            }
+            if err.localizedCaseInsensitiveContains("rate limit")
+                || err.localizedCaseInsensitiveContains("429") {
+                return "限流（rate limit）"
+            }
+            if err.localizedCaseInsensitiveContains("timeout") {
+                return "上游超时"
+            }
+            return "配额刷新失败"
+        }()
+        if errorExpanded {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange)
+                    Text(summary)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button("收起") { errorExpanded = false }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+                Text(err)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(6)
+                    .textSelection(.enabled)
+            }
+        } else {
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.orange)
+                Text(summary)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.orange)
+                Spacer()
+                Button("详情") { errorExpanded = true }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     // MARK: - Sub views
@@ -177,9 +232,9 @@ struct AccountCardView: View {
         if state.switchingIds.contains(account.id) {
             return Color.blue.opacity(0.12)
         }
-        if account.lastError != nil { return Color.yellow.opacity(0.08) }
         if account.isBanned { return Color.red.opacity(0.06) }
         if account.isCoolingDown { return Color.orange.opacity(0.06) }
+        // lastError 不再单独着色——折叠后已不刺眼，避免 list 一片黄
         return Color.secondary.opacity(0.05)
     }
 
