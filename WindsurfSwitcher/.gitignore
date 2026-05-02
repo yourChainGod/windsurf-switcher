@@ -6,3 +6,6 @@
 DerivedData/
 .netrc
 Package.resolved
+build/
+*.dmg
+*.sparseimage

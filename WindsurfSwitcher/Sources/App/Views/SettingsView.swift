@@ -16,6 +16,7 @@ import External
 import Wrapper
 import Relay
 import AppKit
+import ServiceManagement
 
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
@@ -24,6 +25,7 @@ struct SettingsView: View {
     @State private var legacyDaemonLoaded: Bool = false
     @State private var dataDirString: String = ""
     @State private var legacyDirString: String = ""
+    @State private var loginItemEnabled: Bool = false
 
     var body: some View {
         ScrollView {
@@ -31,6 +33,7 @@ struct SettingsView: View {
                 relaySection
                 wrapperSection
                 dataSection
+                generalSection
                 legacySection
                 aboutSection
             }
@@ -44,7 +47,62 @@ struct SettingsView: View {
                 state.toast = Toast(kind: .error, text: "数据目录不可用：\(error)")
             }
             refreshLegacy()
+            refreshLoginItem()
             await state.refreshRelayStatus()
+        }
+    }
+
+    // MARK: - 通用设置（自启动 / 端口）
+
+    private var generalSection: some View {
+        section("通用") {
+            Toggle(isOn: Binding(
+                get: { loginItemEnabled },
+                set: { newValue in setLoginItem(enabled: newValue) }
+            )) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("开机自动启动").font(.system(size: 11))
+                    Text("通过 SMAppService.mainApp 注册到 macOS 登录项")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
+            HStack(spacing: 6) {
+                Text("Relay 端口：")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Text("api=\(state.relayConfig.apiBindPort)  inference=\(state.relayConfig.inferenceBindPort)  cascade=\(state.relayConfig.cascadeBindPort)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Text("当前 phase 端口写死；改端口后需要重装 wrapper 才生效。")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func refreshLoginItem() {
+        if #available(macOS 13.0, *) {
+            loginItemEnabled = (SMAppService.mainApp.status == .enabled)
+        }
+    }
+
+    private func setLoginItem(enabled: Bool) {
+        guard #available(macOS 13.0, *) else { return }
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            loginItemEnabled = (SMAppService.mainApp.status == .enabled)
+            state.toast = Toast(kind: .success, text: enabled ? "已启用开机启动" : "已关闭开机启动")
+        } catch {
+            state.toast = Toast(kind: .error, text: "设置开机启动失败：\(error)")
+            refreshLoginItem()
         }
     }
 
@@ -224,11 +282,19 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         section("关于") {
-            Text("WindsurfSwitcher Native · Phase 2-A")
+            Text("WindsurfSwitcher Native · Phase 4")
                 .font(.system(size: 11, weight: .medium))
-            Text("原生 Swift 重铸；Stable + Next 双 app 共享池。")
+            Text("原生 Swift 重铸 · Stable + Next 双 app 共享池 · 调度中心 + 重试链 + 配额改写")
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Link("dwgx/WindsurfAPI",
+                     destination: URL(string: "https://github.com/dwgx/WindsurfAPI")!)
+                    .font(.system(size: 10))
+                Link("windsurf.com",
+                     destination: URL(string: "https://windsurf.com")!)
+                    .font(.system(size: 10))
+            }
             Button("退出 App") { state.quit() }
                 .controlSize(.small)
         }
