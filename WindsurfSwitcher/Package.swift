@@ -17,6 +17,7 @@ let package = Package(
         .library(name: "WindsurfClient", targets: ["WindsurfClient"]),
         .library(name: "External", targets: ["External"]),
         .executable(name: "wss-cli", targets: ["WSSCLI"]),
+        .executable(name: "WindsurfSwitcher", targets: ["App"]),
     ],
     dependencies: [],
     targets: [
@@ -38,6 +39,11 @@ let package = Package(
             name: "WSSCLI",
             dependencies: ["Core", "WindsurfClient", "External"],
             path: "Sources/WSSCLI"
+        ),
+        .executableTarget(
+            name: "App",
+            dependencies: ["Core", "WindsurfClient", "External"],
+            path: "Sources/App"
         ),
         .testTarget(
             name: "CoreTests",
