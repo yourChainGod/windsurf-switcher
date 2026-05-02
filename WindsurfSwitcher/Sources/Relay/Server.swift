@@ -195,12 +195,40 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                 return
             }
 
+            // GetPlanStatus 劫持：永远返回伪造的满血响应，不打上游
+            if head.uri.contains("/exa.seat_management_pb.SeatManagementService/GetPlanStatus") {
+                handleFakePlanStatus(context: context, head: head)
+                return
+            }
+
             // 调度路径 vs 透传
             if pool != nil {
                 forwardWithPool(context: context, head: head, body: bodyBytes)
             } else {
                 forwardPassthrough(context: context, head: head, body: bodyBytes)
             }
+        }
+    }
+
+    // MARK: GetPlanStatus 伪造（不打上游）
+
+    private func handleFakePlanStatus(context: ChannelHandlerContext, head: HTTPRequestHead) {
+        let started = DispatchTime.now()
+        let stats = self.stats
+        let logger = self.logger
+        let chConfig = self.config
+        let channel = context.channel
+        let eventLoop = context.eventLoop
+        Task {
+            let body = QuotaRewrite.buildFakePlanStatusBody()
+            var headers = HTTPHeaders()
+            headers.add(name: "content-type", value: "application/proto")
+            headers.add(name: "content-length", value: String(body.count))
+            let bytes = [UInt8](body)
+            let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+            await stats.record(RecentRPC(path: head.uri, status: 200, durationMillis: Int(elapsed)))
+            logger.info("[\(chConfig.name)] intercepted GetPlanStatus → fake unlimited (\(bytes.count)B)")
+            await Self.writeBack(channel: channel, eventLoop: eventLoop, status: .ok, headers: headers, body: bytes, keepAlive: self.keepAlive)
         }
     }
 
@@ -389,12 +417,12 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
 
                     let resp = try await client.execute(req, timeout: .seconds(120))
                     let respBody = try await resp.body.collect(upTo: 64 * 1024 * 1024)
-                    let respBytes = respBody.getBytes(at: respBody.readerIndex, length: respBody.readableBytes) ?? []
+                    var respBytes = respBody.getBytes(at: respBody.readerIndex, length: respBody.readableBytes) ?? []
                     let statusCode = Int(resp.status.code)
+                    var respHeaders = resp.headers
 
-                    // 判定结果
+                    // ── 4xx/5xx：record_failure + ban_signal 检测 ─────────
                     if let kind = FailureKind.fromStatus(statusCode) {
-                        // 4xx/5xx：record_failure；optionally cooldown override
                         var override: TimeInterval? = nil
                         if kind == .rateLimit {
                             override = parseResetIn(headers: resp.headers, body: respBytes)
@@ -403,22 +431,77 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                         if let upd = update, let s = sink {
                             await s.apply(upd)
                         }
-                        // 记一份兜底响应（attempt 1 的 4xx 也算"信息"）
+
+                        // 401/403 → 检 ban_signal（30min 窗内 2 次 → banned 10 年）
+                        if kind == .auth {
+                            let text = BanSignal.extractText(respBytes, maxBytes: 8 * 1024)
+                            if BanSignal.matches(text) {
+                                let banUpd = await pool.recordBanSignal(accountId)
+                                if let upd = banUpd, let s = sink {
+                                    await s.apply(upd)
+                                }
+                                logger.warning("[\(chConfig.name)] ban_signal hit acct=\(prefix8(accountId)) text=\(text.prefix(120))")
+                            }
+                        }
+
                         lastResp = (resp.status, resp.headers, respBytes)
                         excludes.append(accountId)
                         logger.info("[\(chConfig.name)] attempt \(attempt) acct=\(prefix8(accountId)) → \(statusCode) (\(kind)); retry=\(attempt < HTTPProxyHandler.maxAttempts)")
                         continue
-                    } else {
-                        // 2xx/3xx → 成功
-                        let update = await pool.recordSuccess(accountId)
+                    }
+
+                    // ── 2xx：先看应用层 connect_error 帧 ─────────────────
+                    let contentType = resp.headers.first(name: "content-type") ?? ""
+                    if let appErr = ConnectError.detect(headers: resp.headers, body: respBytes, contentType: contentType) {
+                        // 200 但应用层有错——视为失败，按错误类型决定 cooldown
+                        let kind: FailureKind
+                        var override: TimeInterval? = appErr.resetIn
+                        if ConnectError.isRateLimit(appErr.message) {
+                            kind = .rateLimit
+                        } else if appErr.code?.hasPrefix("grpc:7") == true || appErr.message.lowercased().contains("unauthenticated") || appErr.message.lowercased().contains("permission") {
+                            kind = .auth
+                        } else {
+                            kind = .transient
+                        }
+                        let update = await pool.recordFailureWithCooldown(accountId, kind: kind, cooldownOverride: override)
                         if let upd = update, let s = sink {
                             await s.apply(upd)
                         }
-                        let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
-                        await stats.record(RecentRPC(path: head.uri, status: statusCode, durationMillis: Int(elapsed)))
-                        await Self.writeBack(channel: channel, eventLoop: eventLoop, status: resp.status, headers: resp.headers, body: respBytes, keepAlive: self.keepAlive)
-                        return
+                        // ban signal 也来一次（200 但带 ban 文案的偶发场景）
+                        if kind == .auth && BanSignal.matches(appErr.message) {
+                            let banUpd = await pool.recordBanSignal(accountId)
+                            if let upd = banUpd, let s = sink {
+                                await s.apply(upd)
+                            }
+                        }
+                        lastResp = (resp.status, resp.headers, respBytes)
+                        excludes.append(accountId)
+                        logger.info("[\(chConfig.name)] attempt \(attempt) acct=\(prefix8(accountId)) 200+app_err code=\(appErr.code ?? "?") msg=\(appErr.message.prefix(80)) (\(kind))")
+                        continue
                     }
+
+                    // ── 2xx 成功：GetUserStatus 路径改写 quota ───────────
+                    if head.uri.contains("/exa.seat_management_pb.SeatManagementService/GetUserStatus") {
+                        do {
+                            let rewritten = try QuotaRewrite.rewriteUserStatusQuota(Data(respBytes))
+                            respBytes = [UInt8](rewritten)
+                            // 重设 content-length
+                            respHeaders.remove(name: "content-length")
+                            respHeaders.add(name: "content-length", value: String(respBytes.count))
+                            logger.info("[\(chConfig.name)] rewrote GetUserStatus quota (\(respBytes.count)B)")
+                        } catch {
+                            logger.warning("[\(chConfig.name)] GetUserStatus rewrite failed: \(error); passthrough")
+                        }
+                    }
+
+                    let updateOk = await pool.recordSuccess(accountId)
+                    if let upd = updateOk, let s = sink {
+                        await s.apply(upd)
+                    }
+                    let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+                    await stats.record(RecentRPC(path: head.uri, status: statusCode, durationMillis: Int(elapsed)))
+                    await Self.writeBack(channel: channel, eventLoop: eventLoop, status: resp.status, headers: respHeaders, body: respBytes, keepAlive: self.keepAlive)
+                    return
                 } catch let err {
                     // 网络层 / timeout → transient
                     let update = await pool.recordFailure(accountId, kind: .transient)
