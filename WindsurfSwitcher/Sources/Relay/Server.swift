@@ -48,6 +48,7 @@ public final class RelayInstance: @unchecked Sendable {
     /// 可选 Pool 引用：内部端点 + 调度路径用。nil 表示纯透传。
     public let pool: Pool?
     public let updateSink: UpdateSink?
+    public let accountSink: AccountSink?
     private let group: any EventLoopGroup
     private let httpClient: HTTPClient
     private let channel: Channel
@@ -61,6 +62,7 @@ public final class RelayInstance: @unchecked Sendable {
         stats: RelayStats,
         pool: Pool?,
         updateSink: UpdateSink?,
+        accountSink: AccountSink?,
         logger: Logger
     ) {
         self.config = config
@@ -70,6 +72,7 @@ public final class RelayInstance: @unchecked Sendable {
         self.stats = stats
         self.pool = pool
         self.updateSink = updateSink
+        self.accountSink = accountSink
         self.logger = logger
     }
 
@@ -93,6 +96,7 @@ public enum RelayServer {
         stats: RelayStats? = nil,
         pool: Pool? = nil,
         updateSink: UpdateSink? = nil,
+        accountSink: AccountSink? = nil,
         logger: Logger? = nil
     ) async throws -> RelayInstance {
         let log = logger ?? Logger(label: "wss.relay.\(config.name)")
@@ -110,6 +114,7 @@ public enum RelayServer {
                         stats: st,
                         pool: pool,
                         updateSink: updateSink,
+                        accountSink: accountSink,
                         logger: log
                     )
                     return channel.pipeline.addHandler(handler)
@@ -127,6 +132,7 @@ public enum RelayServer {
             stats: st,
             pool: pool,
             updateSink: updateSink,
+            accountSink: accountSink,
             logger: log
         )
     }
@@ -147,6 +153,7 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
     private let stats: RelayStats
     private let pool: Pool?
     private let updateSink: UpdateSink?
+    private let accountSink: AccountSink?
     private let logger: Logger
 
     // 单连接 keep-alive 上下游帧汇聚
@@ -160,6 +167,7 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
         stats: RelayStats,
         pool: Pool?,
         updateSink: UpdateSink?,
+        accountSink: AccountSink? = nil,
         logger: Logger
     ) {
         self.config = config
@@ -167,6 +175,7 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
         self.stats = stats
         self.pool = pool
         self.updateSink = updateSink
+        self.accountSink = accountSink
         self.logger = logger
     }
 
@@ -191,7 +200,7 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
             requestBody = nil
 
             if head.uri.hasPrefix("/__relay/") {
-                handleInternal(context: context, head: head)
+                handleInternal(context: context, head: head, body: bodyBytes)
                 return
             }
 
@@ -234,8 +243,16 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
 
     // MARK: Internal endpoints
 
-    private func handleInternal(context: ChannelHandlerContext, head: HTTPRequestHead) {
+    private func handleInternal(context: ChannelHandlerContext, head: HTTPRequestHead, body: [UInt8]) {
         let path = head.uri
+        let method = head.method
+
+        // POST /__relay/accounts —— 外部入号 API
+        if path == "/__relay/accounts" && method == .POST {
+            handleAddAccount(context: context, body: body)
+            return
+        }
+
         let promise = context.eventLoop.makePromise(of: Void.self)
         Task {
             let snap = await stats.snapshot()
@@ -313,6 +330,63 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
             }
             let body = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data("{}".utf8)
             self.writeJSON(context: context, status: .ok, body: body, promise: promise)
+        }
+        _ = promise.futureResult
+    }
+
+    /// POST /__relay/accounts —— 外部 curl 灌号入 store。
+    /// body: JSON `{"session_token":"...","label":"..."?}`（兼容 sessionToken alias）
+    /// 返回 200 `{ok, accountId, added}`；400/500/501 错码对应 BadRequest / sink 错 / 未配置 sink。
+    private func handleAddAccount(context: ChannelHandlerContext, body: [UInt8]) {
+        let promise = context.eventLoop.makePromise(of: Void.self)
+        let sink = self.accountSink
+        let logger = self.logger
+        let chName = self.config.name
+        Task {
+            guard let sink = sink else {
+                let resp: [String: Any] = ["ok": false, "error": "no AccountSink configured"]
+                let data = (try? JSONSerialization.data(withJSONObject: resp, options: [.sortedKeys])) ?? Data("{}".utf8)
+                self.writeJSON(context: context, status: .notImplemented, body: data, promise: promise)
+                return
+            }
+            // 解析 JSON
+            guard !body.isEmpty,
+                  let obj = try? JSONSerialization.jsonObject(with: Data(body), options: []),
+                  let dict = obj as? [String: Any]
+            else {
+                let resp: [String: Any] = ["ok": false, "error": "invalid JSON body"]
+                let data = (try? JSONSerialization.data(withJSONObject: resp, options: [.sortedKeys])) ?? Data("{}".utf8)
+                self.writeJSON(context: context, status: .badRequest, body: data, promise: promise)
+                return
+            }
+            let token = (dict["session_token"] as? String) ?? (dict["sessionToken"] as? String) ?? ""
+            let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                let resp: [String: Any] = ["ok": false, "error": "session_token empty"]
+                let data = (try? JSONSerialization.data(withJSONObject: resp, options: [.sortedKeys])) ?? Data("{}".utf8)
+                self.writeJSON(context: context, status: .badRequest, body: data, promise: promise)
+                return
+            }
+            let label = (dict["label"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedLabel: String? = (label?.isEmpty == false) ? label : nil
+
+            let result = await sink.add(token: trimmed, label: normalizedLabel)
+            switch result {
+            case .success(let (id, wasNew)):
+                logger.info("[\(chName)] POST /__relay/accounts → \(wasNew ? "added" : "updated") acct=\(prefix8(id))")
+                let resp: [String: Any] = [
+                    "ok": true,
+                    "accountId": id,
+                    "added": wasNew,
+                ]
+                let data = (try? JSONSerialization.data(withJSONObject: resp, options: [.sortedKeys])) ?? Data("{}".utf8)
+                self.writeJSON(context: context, status: .ok, body: data, promise: promise)
+            case .failure(let err):
+                logger.warning("[\(chName)] POST /__relay/accounts FAILED: \(err.message)")
+                let resp: [String: Any] = ["ok": false, "error": err.message]
+                let data = (try? JSONSerialization.data(withJSONObject: resp, options: [.sortedKeys])) ?? Data("{}".utf8)
+                self.writeJSON(context: context, status: .internalServerError, body: data, promise: promise)
+            }
         }
         _ = promise.futureResult
     }

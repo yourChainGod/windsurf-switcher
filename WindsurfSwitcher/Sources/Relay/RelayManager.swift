@@ -44,6 +44,7 @@ public actor RelayManager {
     private var apiInstance: RelayInstance?
     private var inferenceInstance: RelayInstance?
     private var updateSink: UpdateSink?
+    private var accountSink: AccountSink?
 
     public init(config: RelayConfig = .default, poolConfig: PoolConfig = .default) {
         self.config = config
@@ -58,8 +59,15 @@ public actor RelayManager {
         self.updateSink = sink
     }
 
+    /// 注入 AccountSink；POST /__relay/accounts 来号时通过它入库。
+    /// 必须在 start() 之前调用，否则 instance 拿不到。
+    public func setAccountSink(_ sink: AccountSink) {
+        self.accountSink = sink
+    }
+
     /// 启动 api + inference 两个明文 relay，并把 Pool 关联到 api 实例（让其
     /// 内部端点 /__relay/health + /__relay/pool 暴露调度中心快照）。
+    /// AccountSink 仅 api 实例挂——POST /__relay/accounts 由 :42199 处理。
     public func start() async throws {
         if apiInstance == nil {
             let cfg = RelayInstanceConfig(
@@ -70,7 +78,8 @@ public actor RelayManager {
             )
             apiInstance = try await RelayServer.start(
                 config: cfg, group: group, httpClient: httpClient,
-                pool: pool, updateSink: updateSink, logger: logger
+                pool: pool, updateSink: updateSink, accountSink: accountSink,
+                logger: logger
             )
         }
         if inferenceInstance == nil {

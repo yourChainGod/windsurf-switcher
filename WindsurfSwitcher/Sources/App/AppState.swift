@@ -165,11 +165,19 @@ public final class AppState: ObservableObject {
             }
         }
 
-        // 3. 打开 store + 加载账号 + 给 RelayManager 注入 sink
+        // 3. 打开 store + 加载账号 + 给 RelayManager 注入两类 sink
         do {
             let s = try await AccountStore.openDefault()
             self.store = s
             await relayManager.setUpdateSink(StoreUpdateSink(store: s))
+            // AccountSink 注入：sink 入库后回调 reload + 触发 quota 刷新
+            let weakSelf = self
+            await relayManager.setAccountSink(StoreAccountSink(store: s) { [weak weakSelf] id in
+                guard let s = weakSelf else { return }
+                await s.reload()
+                await s.refreshQuota(id: id)
+                await s.toastOnMain(Toast(kind: .success, text: "外部 API 入号成功"))
+            })
             await reload()
         } catch {
             self.toast = Toast(kind: .error, text: "无法打开数据目录：\(error)")
@@ -489,6 +497,11 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// MainActor 隔离的 toast 辅助——给 sink 回调用，避免它直接 set @Published。
+    public func toastOnMain(_ t: Toast) async {
+        self.toast = t
+    }
+
     public func quit() {
         quotaTickerTask?.cancel()
         poolSyncTask?.cancel()
@@ -574,6 +587,62 @@ public struct StoreUpdateSink: UpdateSink {
             }
         } catch {
             // best-effort：写失败下次 ticker sync 还有机会修正
+        }
+    }
+}
+
+/// POST /__relay/accounts → AccountStore 入库桥。
+/// 收到 token 后：JWT decode 立即做（拿 email 当 fallback label）→ store.upsert →
+/// 异步通知 AppState reload + 触发一次 quota 刷新（不阻塞 sink 返回，避免 HTTP 端 hang）。
+public struct StoreAccountSink: AccountSink {
+    public let store: AccountStore
+    public let onAdded: @Sendable (UUID) async -> Void   // AppState 注入：reload + quota 刷新
+
+    public init(
+        store: AccountStore,
+        onAdded: @escaping @Sendable (UUID) async -> Void
+    ) {
+        self.store = store
+        self.onAdded = onAdded
+    }
+
+    public func add(token: String, label: String?) async -> Result<(String, Bool), AccountSinkError> {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return .failure(AccountSinkError("token empty"))
+        }
+
+        // 检查是否已存在（同 sessionToken 视为同号）
+        let existing = await store.list().first(where: { $0.sessionToken == trimmed })
+        let wasNew = existing == nil
+
+        // JWT decode 立即做：失败也不阻塞入库。
+        // label 解析顺序（RESTful PATCH 语义：缺字段 = 保留）：
+        //   1. 传了非空 label → 用它（覆盖）
+        //   2. 否则若已有账号 → 保留 existing.label（不被 JWT email 覆盖）
+        //   3. 否则用 JWT email（首次入号的 fallback）
+        //   4. 否则空串（用户后续可在 UI 重命名）
+        let jwt = JWTDecode.decode(trimmed)
+        let resolvedLabel: String = {
+            if let l = label, !l.isEmpty { return l }
+            if let ex = existing { return ex.label }
+            if let e = jwt?.email, !e.isEmpty { return e }
+            return ""
+        }()
+
+        var account = existing ?? Account(label: resolvedLabel, sessionToken: trimmed)
+        account.sessionToken = trimmed
+        account.label = resolvedLabel
+        account.jwtInfo = jwt
+
+        do {
+            let saved = try await store.upsert(account)
+            // 异步触发 reload + quota 刷新——sink 不等
+            let id = saved.id
+            Task { await onAdded(id) }
+            return .success((saved.id.uuidString, wasNew))
+        } catch {
+            return .failure(AccountSinkError("store upsert failed: \(error)"))
         }
     }
 }
