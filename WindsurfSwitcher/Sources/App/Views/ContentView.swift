@@ -2,7 +2,9 @@
 //  ContentView.swift
 //  App
 //
-//  根视图：顶部头条 + 三 tab 切换（Manage / Settings）。
+//  根视图：顶部头条 + 三 tab 切换（Manage / Dashboard / Settings）。
+//  关键：菜单栏 popover 内绝不用 .sheet —— sheet 触发 NSWindow 创建，
+//  会让 MenuBarExtra popover 失焦秒关。一律改 inline 视图栈。
 //
 
 import SwiftUI
@@ -11,25 +13,27 @@ enum AppTab: String, CaseIterable {
     case manage
     case dashboard
     case settings
+    case addToken
 }
 
 struct ContentView: View {
     @EnvironmentObject var state: AppState
     @State private var tab: AppTab = .manage
-    @State private var showAdd = false
 
     var body: some View {
         VStack(spacing: 0) {
-            HeaderBar(tab: $tab, showAdd: $showAdd)
+            HeaderBar(tab: $tab)
             Divider()
             Group {
                 switch tab {
                 case .manage:
-                    ManageView(showAdd: $showAdd)
+                    ManageView(onAddTap: { tab = .addToken })
                 case .dashboard:
                     DashboardView()
                 case .settings:
                     SettingsView()
+                case .addToken:
+                    AddTokenView(onClose: { tab = .manage })
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -39,17 +43,12 @@ struct ContentView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .sheet(isPresented: $showAdd) {
-            AddTokenView(isPresented: $showAdd)
-                .environmentObject(state)
-        }
     }
 }
 
 private struct HeaderBar: View {
     @EnvironmentObject var state: AppState
     @Binding var tab: AppTab
-    @Binding var showAdd: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -69,40 +68,53 @@ private struct HeaderBar: View {
 
             Spacer()
 
-            if tab == .manage {
-                Button(action: { showAdd = true }) {
-                    Image(systemName: "plus").font(.system(size: 13))
+            // addToken 子页：只显示返回按钮
+            if tab == .addToken {
+                Button {
+                    tab = .manage
+                } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 13))
                 }
                 .buttonStyle(.borderless)
-                .help("添加 token")
+                .help("返回账号列表")
+            } else {
+                if tab == .manage {
+                    Button {
+                        tab = .addToken
+                    } label: {
+                        Image(systemName: "plus").font(.system(size: 13))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("添加 token")
+
+                    Button {
+                        Task { await state.refreshAllVisible() }
+                    } label: {
+                        if state.loading {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 13))
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .help("刷新全部")
+                    .disabled(state.loading)
+                }
 
                 Button {
-                    Task { await state.refreshAllVisible() }
+                    tab = (tab == .dashboard ? .manage : .dashboard)
                 } label: {
-                    if state.loading {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.clockwise").font(.system(size: 13))
-                    }
+                    Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 13))
                 }
                 .buttonStyle(.borderless)
-                .help("刷新全部")
-                .disabled(state.loading)
-            }
+                .help(tab == .dashboard ? "返回账号" : "调度中心")
 
-            Button {
-                tab = (tab == .dashboard ? .manage : .dashboard)
-            } label: {
-                Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 13))
+                Button { tab = (tab == .settings ? .manage : .settings) } label: {
+                    Image(systemName: "gearshape").font(.system(size: 13))
+                }
+                .buttonStyle(.borderless)
+                .help(tab == .settings ? "返回账号" : "设置")
             }
-            .buttonStyle(.borderless)
-            .help(tab == .dashboard ? "返回账号" : "调度中心")
-
-            Button { tab = (tab == .settings ? .manage : .settings) } label: {
-                Image(systemName: "gearshape").font(.system(size: 13))
-            }
-            .buttonStyle(.borderless)
-            .help(tab == .settings ? "返回账号" : "设置")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -113,6 +125,7 @@ private struct HeaderBar: View {
         case .manage: return "账号"
         case .dashboard: return "调度中心"
         case .settings: return "设置"
+        case .addToken: return "添加 Token"
         }
     }
 
@@ -121,6 +134,7 @@ private struct HeaderBar: View {
         case .manage: return "Stable + Next 共享池"
         case .dashboard: return "Pool · Health · Snapshot"
         case .settings: return "preferences"
+        case .addToken: return "粘贴 devin-session-token"
         }
     }
 }
@@ -158,7 +172,6 @@ private struct ToastBar: View {
         .id(toast.id)
         .task(id: toast.id) {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
-            // 仅在 toast 仍是当前那条时清掉
         }
     }
 }

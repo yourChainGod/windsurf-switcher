@@ -88,6 +88,11 @@ public final class AppState: ObservableObject {
 
     private var poolSyncTask: Task<Void, Never>?
 
+    // 关键守卫：SwiftUI App.init() 会被反复调用（Scene 重建），
+    // bootstrap 必须只跑一次。否则多个 ticker 并发写 Pool，产生
+    // 0/93/0/93 跳变，UI 看到的是其中一个被清空的瞬间。
+    private var bootstrapped = false
+
     // MARK: Backing services
 
     private var store: AccountStore?
@@ -107,7 +112,14 @@ public final class AppState: ObservableObject {
     // MARK: Lifecycle
 
     /// App 启动钩子：旧 binary 清理 → 数据迁移 → 加载账号 → 启动后台 quota 刷新。
+    /// 幂等——重复调直接返回，避免多个 ticker 并发写 Pool。
     public func bootstrap() async {
+        guard !bootstrapped else {
+            FileHandle.standardError.write(Data("[wss] bootstrap re-entry skipped (already done)\n".utf8))
+            return
+        }
+        bootstrapped = true
+
         // 1. 旧 binary 清理（同步操作，快）
         let cleanup = LegacyCleanup.terminateLegacyBinaries()
         if !cleanup.killedPids.isEmpty {
@@ -127,10 +139,11 @@ public final class AppState: ObservableObject {
             }
         }
 
-        // 3. 打开 store + 加载账号
+        // 3. 打开 store + 加载账号 + 给 RelayManager 注入 sink
         do {
             let s = try await AccountStore.openDefault()
             self.store = s
+            await relayManager.setUpdateSink(StoreUpdateSink(store: s))
             await reload()
         } catch {
             self.toast = Toast(kind: .error, text: "无法打开数据目录：\(error)")
@@ -155,10 +168,13 @@ public final class AppState: ObservableObject {
     }
 
     /// 5s ticker：把 store 当前账号集合同步到 Pool（race-safe merge）。
-    /// 第一次同步立即触发。
+    /// 第一次同步立即触发。幂等——已存在 ticker 直接返回。
     private func startPoolSyncTicker() {
+        if poolSyncTask != nil {
+            FileHandle.standardError.write(Data("[wss] startPoolSyncTicker skip (already running)\n".utf8))
+            return
+        }
         FileHandle.standardError.write(Data("[wss] startPoolSyncTicker called\n".utf8))
-        poolSyncTask?.cancel()
         poolSyncTask = Task { @MainActor in
             FileHandle.standardError.write(Data("[wss] poolSyncTask body started\n".utf8))
             await self.syncPoolOnce()
@@ -453,3 +469,35 @@ public final class AppState: ObservableObject {
 #if canImport(AppKit)
 import AppKit
 #endif
+
+// MARK: - Store-backed UpdateSink
+
+/// Pool 产出的 AccountUpdate → AccountStore 持久化桥。
+/// 在 Relay 任务路径异步调用：lease/失败/成功后由 HTTPProxyHandler 触发。
+/// 通过 actor (AccountStore) 串行写入，race 安全。
+public struct StoreUpdateSink: UpdateSink {
+    public let store: AccountStore
+
+    public init(store: AccountStore) {
+        self.store = store
+    }
+
+    public func apply(_ update: AccountUpdate) async {
+        guard let uuid = UUID(uuidString: update.accountId) else { return }
+        do {
+            _ = try await store.update(id: uuid) { acc in
+                acc.cooldownUntil = update.cooldownUntil.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                acc.consecutiveFailures = update.consecutiveFailures
+                if let lu = update.lastUsedByRelay {
+                    acc.lastUsedByRelay = Date(timeIntervalSince1970: TimeInterval(lu))
+                }
+                acc.internalErrorStreak = update.internalErrorStreak
+                acc.banSignalCount = update.banSignalCount
+                acc.banSignalFirstAt = update.banSignalFirstAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                acc.bannedUntil = update.bannedUntil.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+            }
+        } catch {
+            // best-effort：写失败下次 ticker sync 还有机会修正
+        }
+    }
+}

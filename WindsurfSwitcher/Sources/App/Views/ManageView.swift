@@ -10,7 +10,7 @@ import Core
 
 struct ManageView: View {
     @EnvironmentObject var state: AppState
-    @Binding var showAdd: Bool
+    let onAddTap: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,7 +18,7 @@ struct ManageView: View {
             SummaryStrip()
             Divider().opacity(0.3)
             if state.filteredAccounts.isEmpty {
-                EmptyState(showAdd: $showAdd)
+                EmptyState(onAddTap: onAddTap)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 6) {
@@ -77,7 +77,7 @@ private struct SummaryStrip: View {
 }
 
 private struct EmptyState: View {
-    @Binding var showAdd: Bool
+    let onAddTap: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
@@ -91,7 +91,7 @@ private struct EmptyState: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("+ 添加 Token") { showAdd = true }
+            Button("+ 添加 Token") { onAddTap() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .padding(.top, 4)

@@ -43,6 +43,7 @@ public actor RelayManager {
 
     private var apiInstance: RelayInstance?
     private var inferenceInstance: RelayInstance?
+    private var updateSink: UpdateSink?
 
     public init(config: RelayConfig = .default, poolConfig: PoolConfig = .default) {
         self.config = config
@@ -50,6 +51,11 @@ public actor RelayManager {
         self.httpClient = HTTPClient.shared
         self.logger = Logger(label: "wss.relay.manager")
         self.pool = Pool(config: poolConfig)
+    }
+
+    /// AppState 启动时注入 sink；relay start 后调度路径会通过此 sink 落库。
+    public func setUpdateSink(_ sink: UpdateSink) {
+        self.updateSink = sink
     }
 
     /// 启动 api + inference 两个明文 relay，并把 Pool 关联到 api 实例（让其
@@ -64,7 +70,7 @@ public actor RelayManager {
             )
             apiInstance = try await RelayServer.start(
                 config: cfg, group: group, httpClient: httpClient,
-                pool: pool, logger: logger
+                pool: pool, updateSink: updateSink, logger: logger
             )
         }
         if inferenceInstance == nil {
@@ -76,7 +82,7 @@ public actor RelayManager {
             )
             inferenceInstance = try await RelayServer.start(
                 config: cfg, group: group, httpClient: httpClient,
-                pool: pool, logger: logger
+                pool: pool, updateSink: updateSink, logger: logger
             )
         }
     }

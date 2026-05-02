@@ -3,13 +3,14 @@
 //  App
 //
 //  添加 token 表单：备注 + token textarea + 提交按钮。
+//  改为 inline 子页（不再用 .sheet），消除 menubar popover 失焦关闭问题。
 //
 
 import SwiftUI
 
 struct AddTokenView: View {
     @EnvironmentObject var state: AppState
-    @Binding var isPresented: Bool
+    let onClose: () -> Void
 
     @State private var label: String = ""
     @State private var token: String = ""
@@ -20,10 +21,7 @@ struct AddTokenView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("添加 Token")
-                .font(.system(size: 14, weight: .semibold))
-
+        VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("备注（可选）")
                     .font(.system(size: 11))
@@ -38,7 +36,7 @@ struct AddTokenView: View {
                     .foregroundStyle(.secondary)
                 TextEditor(text: $token)
                     .font(.system(size: 11, design: .monospaced))
-                    .frame(height: 110)
+                    .frame(height: 130)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(Color.secondary.opacity(0.3))
@@ -49,7 +47,7 @@ struct AddTokenView: View {
                     .disableAutocorrection(true)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text("怎么拿这个 token？")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -62,7 +60,7 @@ struct AddTokenView: View {
 
             HStack {
                 Spacer()
-                Button("取消") { isPresented = false }
+                Button("取消") { onClose() }
                     .keyboardShortcut(.escape, modifiers: [])
                 Button(action: submit) {
                     if submitting {
@@ -79,8 +77,7 @@ struct AddTokenView: View {
                 .disabled(!canSubmit)
             }
         }
-        .padding(16)
-        .frame(width: 380, height: 360)
+        .padding(12)
     }
 
     private func submit() {
@@ -91,7 +88,7 @@ struct AddTokenView: View {
             await state.addToken(t, label: l)
             await MainActor.run {
                 submitting = false
-                isPresented = false
+                onClose()
             }
         }
     }

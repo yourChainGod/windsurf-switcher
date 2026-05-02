@@ -2,22 +2,22 @@
 //  Server.swift
 //  Relay
 //
-//  Phase 2-A：最简 NIO HTTP 反代。
+//  Phase 3-B：NIO HTTP 反代 + 账号池调度。
 //
-//  监听 127.0.0.1:<bind>，收到 HTTP/1.1 请求后用 AsyncHTTPClient 转发到上游
-//  base URL，仅剥 hop-by-hop header。
+//  监听 127.0.0.1:<bind>，收到 HTTP/1.1 请求后：
+//    - pool != nil → 走调度路径：lease → splice api_key → 转发 → 重试 → record_*
+//    - pool == nil → 透传（向后兼容）
 //
-//  与旧 src-tauri/src/relay/server.rs 的差异（Phase 2-A 暂留）：
-//    - 无账号池 / 无 splice api_key（Phase 3）
-//    - 无 quota rewrite（Phase 3）
-//    - 无重试链（Phase 3）
-//    - 无 ban_signal / connect_error 检测（Phase 3）
-//    - 不支持 TLS 终结（Phase 2-B 接 cascade :42201）
-//    - 不支持 path_prefix_strip（Phase 2-B / 3）
+//  与旧 src-tauri/src/relay/server.rs 的差异（仍未补齐）：
+//    - 无 quota rewrite（Phase 3-C）
+//    - 无 ban_signal regex（Phase 3-C）
+//    - 无 connect_error 应用层错误检测（Phase 3-C）
+//    - cascade :42201 TLS 终结暂未启用（Phase 2-B 跳过）
 //
 //  内部端点：
-//    - GET /__relay/health  → JSON `{ "ok": true, "name": "...", "stats": {...} }`
+//    - GET /__relay/health  → JSON `{ ok, name, stats, pool? }`
 //    - GET /__relay/stats   → 原始 stats JSON
+//    - GET /__relay/pool    → 池快照（只读 view）
 //
 
 import Foundation
@@ -45,9 +45,9 @@ public struct RelayInstanceConfig: Sendable {
 public final class RelayInstance: @unchecked Sendable {
     public let config: RelayInstanceConfig
     public let stats: RelayStats
-    /// 可选 Pool 引用：内部端点 /__relay/pool / /__relay/health 用来暴露快照。
-    /// nil 表示该 relay 实例不参与 Pool 调度（仅透明代理）。
+    /// 可选 Pool 引用：内部端点 + 调度路径用。nil 表示纯透传。
     public let pool: Pool?
+    public let updateSink: UpdateSink?
     private let group: any EventLoopGroup
     private let httpClient: HTTPClient
     private let channel: Channel
@@ -60,6 +60,7 @@ public final class RelayInstance: @unchecked Sendable {
         channel: Channel,
         stats: RelayStats,
         pool: Pool?,
+        updateSink: UpdateSink?,
         logger: Logger
     ) {
         self.config = config
@@ -68,6 +69,7 @@ public final class RelayInstance: @unchecked Sendable {
         self.channel = channel
         self.stats = stats
         self.pool = pool
+        self.updateSink = updateSink
         self.logger = logger
     }
 
@@ -90,6 +92,7 @@ public enum RelayServer {
         httpClient: HTTPClient,
         stats: RelayStats? = nil,
         pool: Pool? = nil,
+        updateSink: UpdateSink? = nil,
         logger: Logger? = nil
     ) async throws -> RelayInstance {
         let log = logger ?? Logger(label: "wss.relay.\(config.name)")
@@ -106,6 +109,7 @@ public enum RelayServer {
                         httpClient: httpClient,
                         stats: st,
                         pool: pool,
+                        updateSink: updateSink,
                         logger: log
                     )
                     return channel.pipeline.addHandler(handler)
@@ -122,6 +126,7 @@ public enum RelayServer {
             channel: channel,
             stats: st,
             pool: pool,
+            updateSink: updateSink,
             logger: log
         )
     }
@@ -129,16 +134,19 @@ public enum RelayServer {
 
 // MARK: - HTTP proxy ChannelHandler
 
-/// 缓冲完整请求 + AsyncHTTPClient 转发上游 + 回写响应（buffered，phase 2-A 简单实现，
-/// SSE 流式后续 phase 改造）。
+/// 缓冲完整请求 + AsyncHTTPClient 转发上游 + 回写响应。
 final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
+
+    /// 调度路径单次重试上限（参考 server.rs）
+    static let maxAttempts = 5
 
     private let config: RelayInstanceConfig
     private let httpClient: HTTPClient
     private let stats: RelayStats
     private let pool: Pool?
+    private let updateSink: UpdateSink?
     private let logger: Logger
 
     // 单连接 keep-alive 上下游帧汇聚
@@ -146,11 +154,19 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
     private var requestBody: ByteBuffer?
     private var keepAlive = true
 
-    init(config: RelayInstanceConfig, httpClient: HTTPClient, stats: RelayStats, pool: Pool?, logger: Logger) {
+    init(
+        config: RelayInstanceConfig,
+        httpClient: HTTPClient,
+        stats: RelayStats,
+        pool: Pool?,
+        updateSink: UpdateSink?,
+        logger: Logger
+    ) {
         self.config = config
         self.httpClient = httpClient
         self.stats = stats
         self.pool = pool
+        self.updateSink = updateSink
         self.logger = logger
     }
 
@@ -170,19 +186,21 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
             guard let head = requestHead else {
                 return
             }
-            // 缓冲 body
             let bodyBytes = requestBody.flatMap { $0.getBytes(at: $0.readerIndex, length: $0.readableBytes) } ?? []
             requestHead = nil
             requestBody = nil
 
-            // 内部端点：/__relay/health, /__relay/stats
             if head.uri.hasPrefix("/__relay/") {
                 handleInternal(context: context, head: head)
                 return
             }
 
-            // 普通转发：异步发上游，回来后写回 client
-            forwardToUpstream(context: context, head: head, body: bodyBytes)
+            // 调度路径 vs 透传
+            if pool != nil {
+                forwardWithPool(context: context, head: head, body: bodyBytes)
+            } else {
+                forwardPassthrough(context: context, head: head, body: bodyBytes)
+            }
         }
     }
 
@@ -288,9 +306,12 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
         }
     }
 
-    // MARK: Upstream forwarding
+    // MARK: 调度路径（pool != nil）
 
-    private func forwardToUpstream(context: ChannelHandlerContext, head: HTTPRequestHead, body: [UInt8]) {
+    /// 池化转发：lease → splice api_key（若 body 是 metadata）→ 调上游 →
+    /// 失败 record_failure 入 excludes 重试 → 成功 record_success；最多 5 次。
+    /// 拿到的 AccountUpdate 通过 updateSink 异步落库。
+    private func forwardWithPool(context: ChannelHandlerContext, head: HTTPRequestHead, body: [UInt8]) {
         let started = DispatchTime.now()
         let upstreamURL = config.upstreamBase + head.uri
         let stats = self.stats
@@ -298,26 +319,152 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
         let client = self.httpClient
         let chConfig = self.config
         let eventLoop = context.eventLoop
+        let channel = context.channel
+        guard let pool = self.pool else {
+            forwardPassthrough(context: context, head: head, body: body)
+            return
+        }
+        let sink = self.updateSink
+        // cascadeId 在 cascade :42201 启用后从请求 header 提取；当前 phase 全 nil
+        let cascadeId: String? = nil
 
-        // 复制 channel 引用以便异步回写
+        Task {
+            var excludes: [String] = []
+            var lastError: Error?
+            // last "good enough" response 用于 AllExcluded 兜底
+            var lastResp: (status: HTTPResponseStatus, headers: HTTPHeaders, body: [UInt8])?
+
+            for attempt in 1...HTTPProxyHandler.maxAttempts {
+                let lease: Lease
+                do {
+                    lease = try await pool.lease(cascadeId: cascadeId, excludes: excludes)
+                } catch let err {
+                    lastError = err
+                    // 没号可用：用 last good 兜底，否则 502
+                    if let r = lastResp {
+                        await Self.writeBack(channel: channel, eventLoop: eventLoop, status: r.status, headers: r.headers, body: r.body, keepAlive: self.keepAlive)
+                    } else {
+                        await Self.writeError(channel: channel, eventLoop: eventLoop, status: .badGateway, detail: "no usable account: \(err)", keepAlive: self.keepAlive)
+                    }
+                    let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+                    await stats.record(RecentRPC(path: head.uri, status: 502, durationMillis: Int(elapsed)))
+                    return
+                }
+                let accountId = lease.accountId
+                let token = lease.token
+
+                // 构造请求 body：若是 metadata 包，splice api_key
+                var requestBody = body
+                let tokenBytes = Array(token.utf8)
+                if !body.isEmpty {
+                    do {
+                        try ProtoRewrite.rewriteApiKey(&requestBody, newToken: tokenBytes)
+                    } catch ProtoRewriteError.notMetadataFirst {
+                        // 不是 metadata（Ping 等）→ 透传
+                    } catch ProtoRewriteError.noApiKeyField {
+                        // 初始化期 RPC 等 → 透传
+                    } catch ProtoRewriteError.tokenLengthMismatch(let exp, let got) {
+                        logger.warning("[\(chConfig.name)] token length mismatch (expected \(exp), got \(got)); body untouched")
+                    } catch {
+                        logger.warning("[\(chConfig.name)] proto rewrite failed: \(error); body untouched")
+                    }
+                }
+
+                // 发上游
+                do {
+                    var req = HTTPClientRequest(url: upstreamURL)
+                    req.method = .RAW(value: head.method.rawValue)
+                    let dropHeaders: Set<String> = [
+                        "connection", "transfer-encoding", "keep-alive", "upgrade",
+                        "proxy-authenticate", "proxy-authorization", "te", "trailers",
+                        "host", "content-length",
+                    ]
+                    for (name, value) in head.headers {
+                        if dropHeaders.contains(name.lowercased()) { continue }
+                        req.headers.add(name: name, value: value)
+                    }
+                    if !requestBody.isEmpty {
+                        req.body = .bytes(ByteBuffer(bytes: requestBody))
+                    }
+
+                    let resp = try await client.execute(req, timeout: .seconds(120))
+                    let respBody = try await resp.body.collect(upTo: 64 * 1024 * 1024)
+                    let respBytes = respBody.getBytes(at: respBody.readerIndex, length: respBody.readableBytes) ?? []
+                    let statusCode = Int(resp.status.code)
+
+                    // 判定结果
+                    if let kind = FailureKind.fromStatus(statusCode) {
+                        // 4xx/5xx：record_failure；optionally cooldown override
+                        var override: TimeInterval? = nil
+                        if kind == .rateLimit {
+                            override = parseResetIn(headers: resp.headers, body: respBytes)
+                        }
+                        let update = await pool.recordFailureWithCooldown(accountId, kind: kind, cooldownOverride: override)
+                        if let upd = update, let s = sink {
+                            await s.apply(upd)
+                        }
+                        // 记一份兜底响应（attempt 1 的 4xx 也算"信息"）
+                        lastResp = (resp.status, resp.headers, respBytes)
+                        excludes.append(accountId)
+                        logger.info("[\(chConfig.name)] attempt \(attempt) acct=\(prefix8(accountId)) → \(statusCode) (\(kind)); retry=\(attempt < HTTPProxyHandler.maxAttempts)")
+                        continue
+                    } else {
+                        // 2xx/3xx → 成功
+                        let update = await pool.recordSuccess(accountId)
+                        if let upd = update, let s = sink {
+                            await s.apply(upd)
+                        }
+                        let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+                        await stats.record(RecentRPC(path: head.uri, status: statusCode, durationMillis: Int(elapsed)))
+                        await Self.writeBack(channel: channel, eventLoop: eventLoop, status: resp.status, headers: resp.headers, body: respBytes, keepAlive: self.keepAlive)
+                        return
+                    }
+                } catch let err {
+                    // 网络层 / timeout → transient
+                    let update = await pool.recordFailure(accountId, kind: .transient)
+                    if let upd = update, let s = sink {
+                        await s.apply(upd)
+                    }
+                    excludes.append(accountId)
+                    lastError = err
+                    logger.warning("[\(chConfig.name)] attempt \(attempt) acct=\(prefix8(accountId)) network err: \(err)")
+                    continue
+                }
+            } // end for
+
+            // 5 次都失败：用 lastResp 兜底，否则报 502
+            let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+            if let r = lastResp {
+                await stats.record(RecentRPC(path: head.uri, status: Int(r.status.code), durationMillis: Int(elapsed)))
+                await Self.writeBack(channel: channel, eventLoop: eventLoop, status: r.status, headers: r.headers, body: r.body, keepAlive: self.keepAlive)
+            } else {
+                await stats.record(RecentRPC(path: head.uri, status: 502, durationMillis: Int(elapsed)))
+                let detail = lastError.map { "\($0)" } ?? "all attempts exhausted"
+                await Self.writeError(channel: channel, eventLoop: eventLoop, status: .badGateway, detail: detail, keepAlive: self.keepAlive)
+            }
+        }
+    }
+
+    // MARK: 透传路径（pool == nil）
+
+    private func forwardPassthrough(context: ChannelHandlerContext, head: HTTPRequestHead, body: [UInt8]) {
+        let started = DispatchTime.now()
+        let upstreamURL = config.upstreamBase + head.uri
+        let stats = self.stats
+        let logger = self.logger
+        let client = self.httpClient
+        let chConfig = self.config
+        let eventLoop = context.eventLoop
         let channel = context.channel
 
         Task {
             do {
                 var req = HTTPClientRequest(url: upstreamURL)
                 req.method = .RAW(value: head.method.rawValue)
-                // hop-by-hop / 不能透传的 header
                 let dropHeaders: Set<String> = [
-                    "connection",
-                    "transfer-encoding",
-                    "keep-alive",
-                    "upgrade",
-                    "proxy-authenticate",
-                    "proxy-authorization",
-                    "te",
-                    "trailers",
-                    "host",            // AsyncHTTPClient 自动按 url 设置
-                    "content-length",  // AsyncHTTPClient 按 body 自动重设
+                    "connection", "transfer-encoding", "keep-alive", "upgrade",
+                    "proxy-authenticate", "proxy-authorization", "te", "trailers",
+                    "host", "content-length",
                 ]
                 for (name, value) in head.headers {
                     if dropHeaders.contains(name.lowercased()) { continue }
@@ -332,62 +479,14 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                 let respBytes = respBody.getBytes(at: respBody.readerIndex, length: respBody.readableBytes) ?? []
 
                 let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
-                await stats.record(RecentRPC(
-                    path: head.uri,
-                    status: Int(resp.status.code),
-                    durationMillis: Int(elapsed)
-                ))
-
-                // 回写 client（在 EventLoop 上）
-                eventLoop.execute {
-                    var headers = HTTPHeaders()
-                    let hopByHop: Set<String> = ["transfer-encoding", "connection", "keep-alive", "trailer"]
-                    for (n, v) in resp.headers {
-                        if hopByHop.contains(n.lowercased()) { continue }
-                        headers.add(name: n, value: v)
-                    }
-                    headers.replaceOrAdd(name: "content-length", value: String(respBytes.count))
-                    let respHead = HTTPResponseHead(
-                        version: .http1_1,
-                        status: HTTPResponseStatus(statusCode: Int(resp.status.code)),
-                        headers: headers
-                    )
-                    channel.write(NIOAny(HTTPServerResponsePart.head(respHead)), promise: nil)
-                    var buf = channel.allocator.buffer(capacity: respBytes.count)
-                    buf.writeBytes(respBytes)
-                    channel.write(NIOAny(HTTPServerResponsePart.body(.byteBuffer(buf))), promise: nil)
-                    channel.writeAndFlush(NIOAny(HTTPServerResponsePart.end(nil))).whenComplete { _ in
-                        if !self.keepAlive {
-                            channel.close(promise: nil)
-                        }
-                    }
-                }
+                await stats.record(RecentRPC(path: head.uri, status: Int(resp.status.code), durationMillis: Int(elapsed)))
+                await Self.writeBack(channel: channel, eventLoop: eventLoop, status: resp.status, headers: resp.headers, body: respBytes, keepAlive: self.keepAlive)
             } catch {
                 let detailed = "\(error)"
                 logger.warning("upstream \(chConfig.name) [\(upstreamURL)] failed: \(detailed)")
                 let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
-                await stats.record(RecentRPC(
-                    path: head.uri,
-                    status: 502,
-                    durationMillis: Int(elapsed)
-                ))
-                eventLoop.execute {
-                    let bodyText = "{\"error\":\"upstream failed\",\"detail\":\(self.jsonEscape(detailed))}"
-                    let body = Data(bodyText.utf8)
-                    var headers = HTTPHeaders()
-                    headers.add(name: "content-type", value: "application/json")
-                    headers.add(name: "content-length", value: String(body.count))
-                    let head = HTTPResponseHead(version: .http1_1, status: .badGateway, headers: headers)
-                    channel.write(NIOAny(HTTPServerResponsePart.head(head)), promise: nil)
-                    var buf = channel.allocator.buffer(capacity: body.count)
-                    buf.writeBytes(body)
-                    channel.write(NIOAny(HTTPServerResponsePart.body(.byteBuffer(buf))), promise: nil)
-                    channel.writeAndFlush(NIOAny(HTTPServerResponsePart.end(nil))).whenComplete { _ in
-                        if !self.keepAlive {
-                            channel.close(promise: nil)
-                        }
-                    }
-                }
+                await stats.record(RecentRPC(path: head.uri, status: 502, durationMillis: Int(elapsed)))
+                await Self.writeError(channel: channel, eventLoop: eventLoop, status: .badGateway, detail: detailed, keepAlive: self.keepAlive)
             }
         }
     }
@@ -397,11 +496,135 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
         context.close(promise: nil)
     }
 
-    private func jsonEscape(_ s: String) -> String {
-        let escaped = s
+    // MARK: 静态写回 helpers（async 包到 EventLoop）
+
+    private static func writeBack(
+        channel: Channel,
+        eventLoop: EventLoop,
+        status: HTTPResponseStatus,
+        headers: HTTPHeaders,
+        body: [UInt8],
+        keepAlive: Bool
+    ) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            eventLoop.execute {
+                var outHeaders = HTTPHeaders()
+                let hopByHop: Set<String> = ["transfer-encoding", "connection", "keep-alive", "trailer"]
+                for (n, v) in headers {
+                    if hopByHop.contains(n.lowercased()) { continue }
+                    outHeaders.add(name: n, value: v)
+                }
+                outHeaders.replaceOrAdd(name: "content-length", value: String(body.count))
+                let respHead = HTTPResponseHead(version: .http1_1, status: status, headers: outHeaders)
+                channel.write(NIOAny(HTTPServerResponsePart.head(respHead)), promise: nil)
+                var buf = channel.allocator.buffer(capacity: body.count)
+                buf.writeBytes(body)
+                channel.write(NIOAny(HTTPServerResponsePart.body(.byteBuffer(buf))), promise: nil)
+                channel.writeAndFlush(NIOAny(HTTPServerResponsePart.end(nil))).whenComplete { _ in
+                    if !keepAlive { channel.close(promise: nil) }
+                    cont.resume()
+                }
+            }
+        }
+    }
+
+    private static func writeError(
+        channel: Channel,
+        eventLoop: EventLoop,
+        status: HTTPResponseStatus,
+        detail: String,
+        keepAlive: Bool
+    ) async {
+        let escaped = detail
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n")
-        return "\"\(escaped)\""
+        let bodyText = "{\"error\":\"upstream failed\",\"detail\":\"\(escaped)\"}"
+        let body = Data(bodyText.utf8)
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            eventLoop.execute {
+                var headers = HTTPHeaders()
+                headers.add(name: "content-type", value: "application/json")
+                headers.add(name: "content-length", value: String(body.count))
+                let head = HTTPResponseHead(version: .http1_1, status: status, headers: headers)
+                channel.write(NIOAny(HTTPServerResponsePart.head(head)), promise: nil)
+                var buf = channel.allocator.buffer(capacity: body.count)
+                buf.writeBytes(body)
+                channel.write(NIOAny(HTTPServerResponsePart.body(.byteBuffer(buf))), promise: nil)
+                channel.writeAndFlush(NIOAny(HTTPServerResponsePart.end(nil))).whenComplete { _ in
+                    if !keepAlive { channel.close(promise: nil) }
+                    cont.resume()
+                }
+            }
+        }
     }
 }
+
+// MARK: - Reset-in 解析
+
+/// 从 429 响应里挖 "Resets in: 2h59m58s" 风格的剩余时间。
+/// 优先 header（retry-after / x-resets-in），其次 body 文本。返回 TimeInterval 秒。
+/// 解析失败返回 nil → 上层用默认 cooldown_on_rate_limit。
+func parseResetIn(headers: HTTPHeaders, body: [UInt8]) -> TimeInterval? {
+    // header: Retry-After: 30 (秒) or HTTP-date
+    if let v = headers.first(name: "retry-after"), let s = Double(v.trimmingCharacters(in: .whitespaces)) {
+        return s
+    }
+    // body: 解析 "Resets in: 2h59m58s"
+    guard let text = String(bytes: body, encoding: .utf8) else { return nil }
+    return parseResetInText(text)
+}
+
+/// 公开给测试用：从纯文本中解析 "Resets in: 2h59m58s" / "Resets in 1h" / "Resets in: 45m12s" 等。
+func parseResetInText(_ text: String) -> TimeInterval? {
+    // 找 "Resets in" 后第一段连续 [0-9hms] 字符
+    let lower = text.lowercased()
+    guard let range = lower.range(of: "resets in") else { return nil }
+    let tail = lower[range.upperBound...]
+    // 跳过冒号 / 空白
+    var iter = tail.makeIterator()
+    var captured = ""
+    var sawDigit = false
+    while let c = iter.next() {
+        if c == ":" || c == " " || c == "\t" || c == "\n" {
+            if sawDigit { break }
+            continue
+        }
+        if c.isNumber || c == "h" || c == "m" || c == "s" {
+            captured.append(c)
+            if c.isNumber { sawDigit = true }
+        } else {
+            if sawDigit { break } else { return nil }
+        }
+    }
+    if captured.isEmpty { return nil }
+
+    var seconds: TimeInterval = 0
+    var num: Int = 0
+    var any = false
+    for c in captured {
+        if let d = c.hexDigitValue, c.isNumber {
+            num = num * 10 + d
+        } else if c == "h" {
+            seconds += TimeInterval(num) * 3600
+            num = 0
+            any = true
+        } else if c == "m" {
+            seconds += TimeInterval(num) * 60
+            num = 0
+            any = true
+        } else if c == "s" {
+            seconds += TimeInterval(num)
+            num = 0
+            any = true
+        }
+    }
+    // 末尾还有未带后缀的纯数字 → 当秒处理
+    if num > 0 {
+        seconds += TimeInterval(num)
+        any = true
+    }
+    return any ? seconds : nil
+}
+
+private func prefix8(_ s: String) -> String { String(s.prefix(8)) }

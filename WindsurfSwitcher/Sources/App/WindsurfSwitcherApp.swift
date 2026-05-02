@@ -22,10 +22,10 @@ struct WindsurfSwitcherApp: App {
         // 让吾成为合法的菜单栏 app（无 dock 图标，但可显示菜单栏 + 弹窗）。
         NSApplication.shared.setActivationPolicy(.accessory)
         FileHandle.standardError.write(Data("[wss] WindsurfSwitcherApp init; activationPolicy=accessory\n".utf8))
-        Task { @MainActor [state] in
-            await state.bootstrap()
-            FileHandle.standardError.write(Data("[wss] bootstrap done; accounts=\(state.accounts.count)\n".utf8))
-        }
+        // 注意：bootstrap 不在这里跑！App.init() 会被 SwiftUI 多次调用，
+        // 直接 Task 会捕获非 @StateObject 持久实例的 AppState，导致
+        // ticker 跑在孤儿 state 上，UI 绑定的另一个 state 永远空。
+        // 正确做法：ContentView.task 内调 bootstrap（自带幂等守卫）。
     }
 
     var body: some Scene {
@@ -33,6 +33,10 @@ struct WindsurfSwitcherApp: App {
             ContentView()
                 .environmentObject(state)
                 .frame(width: 380, height: 520)
+                .task {
+                    await state.bootstrap()
+                    FileHandle.standardError.write(Data("[wss] bootstrap done (via ContentView.task); accounts=\(state.accounts.count)\n".utf8))
+                }
         } label: {
             // MenuBarExtra 的 label 用 systemImage 做模板图，自动跟随浅深色反色。
             // 用 "wind" + 圆形外框，确保在 macOS 菜单栏中可见性高。
