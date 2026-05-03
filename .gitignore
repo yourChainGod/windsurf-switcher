@@ -1,32 +1,32 @@
-node_modules
-dist
-dist-ssr
 .DS_Store
-*.local
+
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Local secrets
 .env
 .env.*
 !.env.example
+.netrc
 
-# Build / TS / Vite caches
-*.tsbuildinfo
-.cache/
+# App packaging artifacts
+build/
+*.dmg
+*.sparseimage
 
-# Tauri / Rust
-src-tauri/target
-src-tauri/gen
-# Cargo.lock 必须随 binary 项目提交（保证 cargo build 复现），故不排除
-
-# Dev-time protobuf dumps（抓包/还原产物，非源码）
+# Debug captures / protocol dumps
 GetOneTimeAuthToken
+GetChatMessage
+GetChatMessage2
 *.proto.bin
-
-# Python tools cache
-__pycache__/
-*.pyc
 
 # Editor
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 *.swp
 *.swo
