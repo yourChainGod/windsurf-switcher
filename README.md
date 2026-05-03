@@ -1,60 +1,58 @@
 # Windsurf Switcher
 
-Native macOS menu-bar app for managing multiple Windsurf accounts, switching
-accounts between Windsurf Stable and Windsurf Next, and keeping the local
-language-server relay pointed at accounts with quota.
+Windsurf Switcher 是一个原生 macOS 菜单栏应用，用来管理多个 Windsurf
+账号，在 Windsurf Stable 和 Windsurf Next 之间切号，并让本地语言服务器 relay
+尽量使用仍有额度的账号。
 
-This repository is now the Swift native implementation. The old Tauri / React /
-Rust project has been removed from the root tree.
+当前仓库已经切换为 Swift 原生实现。旧的 Tauri / React / Rust 根项目已经移除。
 
-## What It Does
+## 功能
 
-- Stores multiple `devin-session-token` accounts locally.
-- Shows daily / weekly quota, cooldown, ban, and relay health in a compact
-  menu-bar popover.
-- Switches accounts through Windsurf's one-time-auth-token deep link.
-- Installs a small language-server wrapper for Windsurf Stable and Windsurf Next.
-- Runs local relays for Stable and Next on separate ports so their active
-  account state does not collide.
-- Rewrites `GetUserJwt` responses through the account pool and skips accounts
-  with exhausted quota.
-- Soft-triggers Windsurf language servers to request fresh JWTs by using
-  `StartCascade`, including the periodic 2.5-minute refresh path.
-- Exposes a local account-import API for scripts and automation.
+- 本地保存多个 `devin-session-token` 账号。
+- 在菜单栏弹窗里显示每日 / 每周额度、冷却、封禁和 relay 健康状态。
+- 通过 Windsurf 的 one-time-auth-token deep link 完成切号。
+- 为 Windsurf Stable 和 Windsurf Next 安装轻量 language-server wrapper。
+- Stable 和 Next 使用独立本地端口，两个 app 的 active 账号状态互不干扰。
+- 通过账号池重写 `GetUserJwt` 响应，并跳过额度已耗尽的账号。
+- 使用 `StartCascade` 软触发 Windsurf language server 重新请求 `GetUserJwt`，
+  包括 2.5 分钟一次的中间刷新节奏。
+- 提供本地账号导入 API，方便脚本批量入号。
 
-## Requirements
+## 环境要求
 
-- macOS 13 or newer
-- Swift 5.10 or newer
-- Windsurf installed at `/Applications/Windsurf.app`
-- Optional: Windsurf Next installed at `/Applications/Windsurf - Next.app`
+- macOS 13 或更新版本
+- Swift 5.10 或更新版本
+- Windsurf Stable：`/Applications/Windsurf.app`
+- 可选 Windsurf Next：`/Applications/Windsurf - Next.app`
 
-No Node, pnpm, Rust, or Tauri toolchain is required anymore.
+现在不再需要 Node、pnpm、Rust 或 Tauri 工具链。
 
-## Build And Test
+## 构建与测试
 
 ```bash
 swift test
 swift build --product WindsurfSwitcher
 ```
 
-Release app bundle:
+构建 release app：
 
 ```bash
 bash scripts/build-app.sh release
 open build/WindsurfSwitcher.app
 ```
 
-DMG:
+打 DMG：
 
 ```bash
 bash scripts/build-dmg.sh
 ```
 
-The release bundle is written to `build/WindsurfSwitcher.app`. The DMG is
-written to `build/WindsurfSwitcher-<version>.dmg`.
+产物位置：
 
-## Install Locally
+- app：`build/WindsurfSwitcher.app`
+- DMG：`build/WindsurfSwitcher-<version>.dmg`
+
+## 本机安装
 
 ```bash
 bash scripts/build-app.sh release
@@ -63,38 +61,36 @@ ditto build/WindsurfSwitcher.app /Applications/WindsurfSwitcher.app
 open /Applications/WindsurfSwitcher.app
 ```
 
-The app is an `LSUIElement` menu-bar app, so it has no Dock icon. Look for the
-wind icon in the macOS menu bar.
+这是一个 `LSUIElement` 菜单栏应用，没有 Dock 图标。启动后请在 macOS 菜单栏里找
+wind 图标。
 
-## First Run
+## 首次使用
 
-1. Open Windsurf Switcher from `/Applications`.
-2. Add accounts from the account-management page, or import them through the
-   local API.
-3. Open Settings and run `一键安装两个 app`.
-4. Approve the macOS administrator prompt. The app replaces each Windsurf
-   language-server binary with a shell wrapper and keeps the original binary as
-   `.real`.
-5. Restart Windsurf / Windsurf Next if they were already running.
+1. 从 `/Applications` 打开 Windsurf Switcher。
+2. 在账号管理页添加账号，或通过本地 API 导入账号。
+3. 打开设置页，点击 `一键安装两个 app`。
+4. 按 macOS 提示输入管理员密码。应用会把每个 Windsurf 的 language-server
+   binary 替换成 shell wrapper，并把原 binary 备份为 `.real`。
+5. 如果 Windsurf / Windsurf Next 已经在运行，重启它们。
 
-The wrapper is reversible from Settings. Uninstalling restores the original
-language-server binary from the `.real` backup.
+wrapper 可以在设置页卸载。卸载时会把 `.real` 备份还原成原 language-server
+binary。
 
-## Local Ports
+## 本地端口
 
 | App | API relay | Inference relay |
 | --- | ---: | ---: |
 | Windsurf Stable | `127.0.0.1:42199` | `127.0.0.1:42200` |
 | Windsurf Next | `127.0.0.1:42201` | `127.0.0.1:42202` |
 
-Useful diagnostics:
+常用诊断命令：
 
 ```bash
 curl -fsS http://127.0.0.1:42199/__relay/health
 curl -fsS http://127.0.0.1:42201/__relay/health
 ```
 
-## Import Accounts By API
+## 通过 API 导入账号
 
 ```bash
 curl -s -X POST http://127.0.0.1:42199/__relay/accounts \
@@ -102,21 +98,23 @@ curl -s -X POST http://127.0.0.1:42199/__relay/accounts \
   -d '{"session_token":"<devin-session-token-or-jwt>","label":"backup"}'
 ```
 
-The token stays on this Mac. It is stored in:
+token 只保存在本机，数据文件路径：
 
 ```text
 ~/Library/Application Support/com.windsurfswitcher.native/accounts.json
 ```
 
-Legacy Tauri data can be imported from:
+旧 Tauri 版本的数据可以从这里迁移：
 
 ```text
 ~/Library/Application Support/com.windsurf.switcher/accounts.json
 ```
 
-## CLI
+迁移不会删除旧文件，只会复制并转换到新的 native 数据目录。
 
-The package also builds `wss-cli`:
+## 命令行工具
+
+Swift package 里也包含 `wss-cli`：
 
 ```bash
 swift run wss-cli check
@@ -129,30 +127,29 @@ swift run wss-cli switch <uuid> next
 swift run wss-cli kill-legacy
 ```
 
-## Project Layout
+## 项目结构
 
 ```text
 .
 ├── Package.swift
 ├── Sources
-│   ├── App              SwiftUI MenuBarExtra app and UI state
-│   ├── Core             Account model, persistence, protobuf wire helpers
-│   ├── External         Legacy cleanup helpers
-│   ├── Relay            Local HTTP relays, pool scheduler, response rewriting
-│   ├── WindsurfClient   GetOTT, GetPlanStatus, JWT decoding
-│   ├── Wrapper          Language-server wrapper installer
-│   └── WSSCLI           Command-line maintenance tool
+│   ├── App              SwiftUI MenuBarExtra 应用和 UI 状态
+│   ├── Core             账号模型、持久化、protobuf wire 工具
+│   ├── External         旧版本清理辅助
+│   ├── Relay            本地 HTTP relay、账号池调度、响应重写
+│   ├── WindsurfClient   GetOTT、GetPlanStatus、JWT 解码
+│   ├── Wrapper          language-server wrapper 安装器
+│   └── WSSCLI           命令行维护工具
 ├── Tests
 └── scripts
     ├── build-app.sh
     └── build-dmg.sh
 ```
 
-## Notes
+## 说明
 
-- `GetUserStatus` 401 does not reliably cause Windsurf to re-auth. This app uses
-  `StartCascade` as a soft trigger for fresh `GetUserJwt` requests.
-- Stable and Next are intentionally scoped separately in the relay manager, so
-  switching or quota events in one app do not overwrite the other's active JWT.
-- Quota refresh is defensive: before rotating to a new JWT candidate, the app
-  refreshes that account and requires usable quota.
+- `GetUserStatus` 返回 401 不能可靠触发 Windsurf 重新认证，所以本项目使用
+  `StartCascade` 软触发新的 `GetUserJwt` 请求。
+- Stable 和 Next 在 relay manager 里独立分组，某个 app 的切号或额度事件不会覆盖
+  另一个 app 的 active JWT。
+- 额度刷新是保守策略：切换到新的 JWT candidate 前，会再次刷新该账号并确认它仍有可用额度。
