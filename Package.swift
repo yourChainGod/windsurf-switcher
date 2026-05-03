@@ -6,8 +6,8 @@ import PackageDescription
 //   - async-http-client 1.x：上游反代客户端，h2 ALPN 自动协商 + 流式响应 body
 //   - swift-log：与 NIO 默认 logger 互操作
 //
-// 注：cascade :42201 + DNS 劫持那条路已废，cascade chat 直连原版上游。
-// 故不需要 swift-nio-ssl / swift-certificates 这些 TLS 终结依赖。
+// 当前只代理 language server 的 api / inference 明文端口，不做 TLS 终结。
+// 因此不需要 swift-nio-ssl / swift-certificates。
 
 let package = Package(
     name: "WindsurfSwitcher",

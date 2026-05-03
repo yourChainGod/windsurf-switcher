@@ -3,7 +3,7 @@
 //  Relay
 //
 //  Connect-RPC / gRPC 应用层错误检测 + "Resets in" 解析。
-//  直译 src-tauri/src/relay/connect_error.rs。
+//  Connect-RPC 错误帧识别。
 //
 //  背景：上游 cascade RPC 经常用 HTTP 200 + body 内 Connect 错误帧 来报错
 //  （rate-limit、permission denied 等）。原 server 只看 HTTP status，

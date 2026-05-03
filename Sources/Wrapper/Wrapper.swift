@@ -2,7 +2,7 @@
 //  Wrapper.swift
 //  Wrapper
 //
-//  LS binary 替换：检测状态机 / 安装 / 卸载（直译 src-tauri/src/wrapper.rs）。
+//  LS binary 替换：检测状态机 / 安装 / 卸载。
 //
 //  路径：<App>/Contents/Resources/app/extensions/windsurf/bin/language_server_macos_arm
 //
@@ -11,7 +11,7 @@
 //    - Pristine: 真 binary（Mach-O magic 头），可装 wrapper
 //    - InstalledMatching: 已装 wrapper 且端口与当前 relay 一致
 //    - InstalledStale: 已装 wrapper 但端口已陈旧（需刷新）
-//    - Foreign: 文件存在但非 Mach-O 也非吾们的 wrapper（拒绝覆盖）
+//    - Foreign: 文件存在但非 Mach-O 也非本项目 wrapper（拒绝覆盖）
 //
 //  写权限：先尝试普通 fs 操作；EACCES 时调 osascript 提权。
 //
@@ -101,7 +101,7 @@ public struct Wrapper {
         if bytes == machoMagicLE || bytes == machoMagicBE {
             return .pristine
         }
-        // 不是 Mach-O；看是不是吾们的 wrapper
+        // 不是 Mach-O；看是不是本项目 wrapper
         guard let body = try? String(contentsOf: lsPath, encoding: .utf8) else {
             return .foreign
         }
@@ -168,7 +168,7 @@ public struct Wrapper {
     /// includeMv=true 时先 mv 原 binary → .real。
     private func writeScriptShell(includeMv: Bool) -> String {
         // wrapper 内容写到一个临时 file（避免 heredoc 与 osascript 引号嵌套地狱），
-        // 然后 mv 到目标位置；与旧版 rust 代码用 heredoc 相同语义但更稳。
+        // 然后 mv 到目标位置；与旧版 heredoc 写入方式同语义但更稳。
         let tmp = "/tmp/wss-wrapper-\(UUID().uuidString.prefix(8)).sh"
         let body = expectedScript
         // base64 安全传递避免特殊字符
@@ -211,16 +211,6 @@ public struct Wrapper {
             let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             throw WrapperError.osascriptFailed(stderr: err)
         }
-    }
-
-    /// 同时安装两个 app 的 wrapper。osascript 弹一次密码框完成两份替换。
-    public static func installBoth(relayPort: UInt16, inferencePort: UInt16) throws -> [WrapperStatus] {
-        try installBoth(
-            stableRelayPort: relayPort,
-            stableInferencePort: inferencePort,
-            nextRelayPort: relayPort,
-            nextInferencePort: inferencePort
-        )
     }
 
     /// 同时安装两个 app 的 wrapper；stable/next 可以使用不同端口以隔离 active JWT。

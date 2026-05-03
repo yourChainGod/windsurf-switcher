@@ -2,8 +2,7 @@
 //  RelayManager.swift
 //  Relay
 //
-//  统一管理 api + inference 两个 relay 实例的启停。
-//  （cascade :42201 + DNS 劫持那条路已废，cascade chat 流量直连原版上游）
+//  统一管理 Stable/Next 的 api + inference relay 实例。
 //
 
 import Foundation
@@ -78,15 +77,6 @@ public actor RelayManager {
     /// 必须在 start() 之前调用。
     public func setQuotaRefreshSink(_ sink: QuotaRefreshSink) {
         self.quotaRefreshSink = sink
-    }
-
-    /// 暴露 Pool 当前 active accountId（active fast-refresh ticker 用）。
-    public func currentActiveAccountId() async -> String? {
-        await pool.getCurrentActiveAccount(app: .stable)
-    }
-
-    public func currentActiveAccountId(app: WindsurfApp) async -> String? {
-        await pool.getCurrentActiveAccount(app: app)
     }
 
     public func currentActiveAccountIds() async -> [String] {
@@ -167,9 +157,6 @@ public actor RelayManager {
             nextInferenceBoundDescription: inferenceInstances[.next]?.boundAddress?.description
         )
     }
-
-    public var apiStats: RelayStats? { apiInstances[.stable]?.stats }
-    public var inferenceStats: RelayStats? { inferenceInstances[.stable]?.stats }
 
     /// 拼合 api + inference 两路 stats 给 Dashboard 用。
     public func combinedStatsSnapshot() async -> StatsSnapshot {

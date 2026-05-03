@@ -2,7 +2,7 @@
 //  Account.swift
 //  Core
 //
-//  账号模型：1:1 对应旧 src-tauri/src/store.rs::Account，外加 `lastUsedApp` 双 app 标记。
+//  账号模型：本机存储结构，外加 `lastUsedApp` 双 app 标记。
 //
 //  字段命名：JSON 里写 camelCase（旧版是 snake_case，DataMigration 负责转换）。
 //
@@ -77,7 +77,7 @@ public struct Account: Codable, Identifiable, Equatable, Sendable {
     /// 双 app：上次切到哪个 app 用过这号。仅 UI / 记账，relay 不感知。
     public var lastUsedApp: WindsurfApp?
 
-    // ─── Pool 调度状态（与旧 store.rs::Account 一一对应） ─────────────
+    // Pool 调度状态。
     public var cooldownUntil: Date?
     public var consecutiveFailures: Int
     public var lastUsedByRelay: Date?

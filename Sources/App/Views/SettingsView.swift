@@ -2,9 +2,9 @@
 //  SettingsView.swift
 //  App
 //
-//  设置面板 (Phase 2-A)：
+//  设置面板：
 //    - 数据目录 + 迁移
-//    - Relay 端口监听状态（api / inference / cascade）
+//    - Relay 端口监听状态（api / inference）
 //    - Wrapper 双 app 安装状态 + 安装/卸载按钮
 //    - 旧 binary 状态
 //    - 关于
@@ -78,7 +78,7 @@ struct SettingsView: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            Text("当前 phase 端口写死；改端口后需要重装 wrapper 才生效。")
+            Text("当前版本端口固定；改端口后需要重装 wrapper 才生效。")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
         }
@@ -296,7 +296,7 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         section("关于") {
-            Text("WindsurfSwitcher Native · Phase 4")
+            Text("WindsurfSwitcher Native")
                 .font(.system(size: 11, weight: .medium))
             Text("原生 Swift 重铸 · Stable + Next 双 app 共享池 · 调度中心 + 重试链 + 配额改写")
                 .font(.system(size: 10))

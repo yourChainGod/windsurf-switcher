@@ -2,7 +2,7 @@
 //  GetPlanStatus.swift
 //  WindsurfClient
 //
-//  调 windsurf web-backend GetPlanStatus（直译 src-tauri/src/windsurf.rs:273-340）。
+//  调 Windsurf web-backend GetPlanStatus。
 //
 //  请求拓扑：
 //    POST https://web-backend.windsurf.com/exa.seat_management_pb.SeatManagementService/GetPlanStatus

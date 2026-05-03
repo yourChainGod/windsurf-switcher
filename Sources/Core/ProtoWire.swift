@@ -2,7 +2,7 @@
 //  ProtoWire.swift
 //  Core
 //
-//  极简 protobuf wire-format 编解码（直译 src-tauri/src/proto.rs）
+//  极简 protobuf wire-format 编解码。
 //
 //  仅实现本工具用到的字段类型：
 //    - varint（wire type 0）

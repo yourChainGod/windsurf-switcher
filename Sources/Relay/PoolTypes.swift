@@ -2,10 +2,10 @@
 //  PoolTypes.swift
 //  Relay
 //
-//  Pool 公开类型：直译 src-tauri/src/relay/pool.rs 的 PoolConfig / FailureKind /
-//  PoolError / Lease / AccountUpdate / EntrySnapshot / HealthSummary。
+//  Pool 公开类型：PoolConfig / FailureKind / PoolError / Lease /
+//  AccountUpdate / EntrySnapshot / HealthSummary。
 //
-//  时间戳约定：与旧 rust 一致用 i64 unix 秒（不是 Date）——
+//  时间戳约定：用 i64 unix 秒（不是 Date）——
 //    - 测试 deterministic 注入更简单
 //    - cooldown / ban 比较直接整数比较，性能 / 等价性最稳
 //

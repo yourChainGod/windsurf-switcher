@@ -2,7 +2,7 @@
 //  WrapperTests.swift
 //  WrapperTests
 //
-//  状态机单元测试。直译自 src-tauri/src/wrapper.rs::tests。
+//  Wrapper 状态机单元测试。
 //  在临时目录构造假 LS binary，验证 state machine 正确，不真正调 osascript。
 //
 
@@ -76,7 +76,7 @@ final class WrapperTests: XCTestCase {
 
     // MARK: - StaleDetection 通过端口变化
 
-    /// 旧版 src-tauri rust test：detects_installed_matching_and_stale
+    /// 覆盖 installedMatching 与 installedStale 的检测。
     /// Swift 端因 LS 路径硬编码（macOS app bundle），这个测试只校验
     /// expectedScript 在端口不同时不同。
     func testExpectedScriptDiffersByPort() {

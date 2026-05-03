@@ -2,7 +2,7 @@
 //  BanSignalTests.swift
 //  RelayTests
 //
-//  直译 src-tauri/src/relay/ban_signal.rs::tests 的中英正负例矩阵。
+//  BanSignal 中英正负例矩阵。
 //
 
 import XCTest

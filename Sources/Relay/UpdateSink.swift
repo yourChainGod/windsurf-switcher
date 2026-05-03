@@ -2,8 +2,8 @@
 //  UpdateSink.swift
 //  Relay
 //
-//  把 Pool 的 record_* 产出的 AccountUpdate 落库 / 上抛到 UI；
-//  把 server.rs 的 /__relay/accounts POST 入库到 store。
+//  把 Pool 的 AccountUpdate 落库 / 上抛到 UI；
+//  把 /__relay/accounts POST 入库到 store。
 //
 //  Pool 不直接持有 store 引用——这两个 protocol 解耦让 lib 可单独测试。
 //
@@ -38,22 +38,4 @@ public extension QuotaRefreshSink {
     func requestRefresh(accountId: String) async {
         await requestRefresh(accountId: accountId, force: false)
     }
-}
-
-/// 占位实现，给单元测试用。
-public struct NoopUpdateSink: UpdateSink {
-    public init() {}
-    public func apply(_ update: AccountUpdate) async {}
-}
-
-public struct NoopAccountSink: AccountSink {
-    public init() {}
-    public func add(token: String, label: String?) async -> Result<(String, Bool), AccountSinkError> {
-        .failure(AccountSinkError("no account sink configured"))
-    }
-}
-
-public struct NoopQuotaRefreshSink: QuotaRefreshSink {
-    public init() {}
-    public func requestRefresh(accountId: String, force: Bool) async {}
 }

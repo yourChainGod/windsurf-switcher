@@ -2,7 +2,7 @@
 //  JWTRewriteTests.swift
 //  RelayTests
 //
-//  直译 src-tauri/src/relay/jwt_rewrite.rs::tests。
+//  JWTRewrite 回归测试。
 //
 
 import XCTest

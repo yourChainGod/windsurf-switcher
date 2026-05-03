@@ -2,7 +2,7 @@
 //  GetOTT.swift
 //  WindsurfClient
 //
-//  调 Windsurf 后端 GetOneTimeAuthToken（直译 src-tauri/src/windsurf.rs:76-126）。
+//  调 Windsurf 后端 GetOneTimeAuthToken。
 //
 //  请求拓扑：
 //    POST https://windsurf.com/_backend/exa.seat_management_pb.SeatManagementService/GetOneTimeAuthToken

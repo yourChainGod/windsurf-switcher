@@ -64,19 +64,19 @@ public final class AppState: ObservableObject {
     @Published public var refreshingIds: Set<UUID> = []
     @Published public var switchingIds: Set<UUID> = []
 
-    // Phase 2-A 新增
+    // Relay / wrapper 状态。
     @Published public var relayStatus: RelayManagerStatus = RelayManagerStatus()
     @Published public var wrapperStatuses: [WindsurfApp: WrapperStatus] = [:]
     @Published public var wrapperBusy: Bool = false
 
-    // Phase 3-A：调度中心快照
+    // 调度中心快照。
     @Published public var poolSnapshot: [EntrySnapshot] = []
     @Published public var poolHealth: HealthSummary = HealthSummary(
         drought: false, droughtThreshold: 5, totalAccounts: 0,
         availableAccounts: 0, cooledAccounts: 0, bannedAccounts: 0,
         lowestWeeklyPercent: nil, lowestDailyPercent: nil
     )
-    /// Phase 4：合并 api+inference 两路的实时 RPC stats（5s 一刷，与 pool 同 ticker）。
+    /// 合并 api + inference 两路的实时 RPC stats（5s 一刷，与 pool 同 ticker）。
     @Published public var statsSnapshot: StatsSnapshot = StatsSnapshot(
         total: 0, success: 0, failure: 0, lastMinuteCount: 0, recent: []
     )
@@ -119,7 +119,7 @@ public final class AppState: ObservableObject {
 
     // MARK: Lifecycle
 
-    /// App 启动钩子：旧 binary 清理 → 数据迁移 → 加载账号 → 启动后台 quota 刷新。
+    /// App 启动钩子：旧版清理 → 数据迁移 → 加载账号 → 启动 relay / 后台刷新。
     /// 幂等——重复调直接返回，避免多个 ticker 并发写 Pool。
     public func bootstrap() async {
         guard !bootstrapped else {
@@ -178,16 +178,16 @@ public final class AppState: ObservableObject {
             self.toast = Toast(kind: .error, text: "无法打开数据目录：\(error)")
         }
 
-        // 4. 后台定时刷新 quota（每 5min 一轮，每轮挑 8 号串行）
+        // 4. 后台全池 quota 刷新
         startQuotaTicker()
-        // 4b. active 账号高频刷新 ticker（15s 一次，只刷当前 active）
+        // 4b. active 账号高频刷新 ticker（15s 一次，刷新当前 active）
         startActiveQuotaTicker()
 
         // 5. 先把现有账号灌进 Pool —— 必须在 start() 之前，否则端口已开但池为空，
         // LS 在 0~5s 启动窗口里所有 lease 都拿不到号 → 502 Bad Gateway。
         await syncPoolOnce()
 
-        // 6. 启动 relay（api + inference 明文端口；cascade 流量直连原版上游，不经此 relay）
+        // 6. 启动 relay（stable/next 各自 api + inference 明文端口）
         do {
             try await relayManager.start()
             self.relayStatus = await relayManager.status()
@@ -578,9 +578,8 @@ public final class AppState: ObservableObject {
 
     /// 单 ticker：1min 一轮，全池所有号都被刷一遍。
     ///
-    /// 历史复杂方案（active/hot/stale 三层 ticker + 多种"识别热号"启发式）废除——
-    /// 架构断层（cascade 直连上游不经 relay）让任何"识别 hot 号"逻辑都有漏网之鱼，
-    /// 用户报"号被烧但 quota 显示 100%"。简化为全池 1min 强制覆盖：
+    /// 历史复杂方案（active/hot/stale 三层 ticker + 多种"识别热号"启发式）废除。
+    /// 现在简化为全池 1min 强制覆盖：
     ///   - 不判断哪个号 hot，全部刷
     ///   - 1min 节奏 ≪ GetUserJwt TTL（5-15min）→ 任何号在烧时都被刷 5+ 次
     ///   - 4 号并发 + 150ms 批间隔；150 号约 30s 跑完一轮 → ticker 60s 有 buffer

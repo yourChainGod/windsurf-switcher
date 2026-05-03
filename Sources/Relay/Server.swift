@@ -2,7 +2,7 @@
 //  Server.swift
 //  Relay
 //
-//  Phase 3-B：NIO HTTP 反代 + 账号池调度。
+//  NIO HTTP 反代 + 账号池调度。
 //
 //  监听 127.0.0.1:<bind>，收到 HTTP/1.1 请求后：
 //    - pool != nil → 走调度路径：lease → splice api_key → 转发 → 重试 → record_*

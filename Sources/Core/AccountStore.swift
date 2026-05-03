@@ -49,7 +49,7 @@ public func defaultDataDirectory() throws -> URL {
     return base.appendingPathComponent("com.windsurfswitcher.native", isDirectory: true)
 }
 
-/// 旧 rust+tauri 工程的数据目录（迁移源）。
+/// 旧版数据目录（迁移源）。
 public func legacyDataDirectory() throws -> URL {
     let fm = FileManager.default
     guard let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {

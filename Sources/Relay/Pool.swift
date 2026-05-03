@@ -2,7 +2,7 @@
 //  Pool.swift
 //  Relay
 //
-//  调度中心：1:1 移植 src-tauri/src/relay/pool.rs。
+//  调度中心：负责账号选择、冷却、封禁、active JWT 锚定和并发栅。
 //
 //  ## 核心算法
 //
@@ -106,8 +106,6 @@ public actor Pool {
     }
 
     // MARK: - Public API
-
-    public func size() -> Int { entries.count }
 
     public func lease() async throws -> Lease {
         try await lease(excludes: [])

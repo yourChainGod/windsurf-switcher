@@ -2,8 +2,7 @@
 //  ScriptTemplate.swift
 //  Wrapper
 //
-//  内嵌的 wrapper sh 脚本模板。原样翻译自
-//  src-tauri/wrapper/language_server_macos_arm.sh，含 __RELAY_PORT__ /
+//  内嵌的 wrapper sh 脚本模板，含 __RELAY_PORT__ /
 //  __INFERENCE_PORT__ 占位符。
 //
 //  作用：
@@ -45,7 +44,7 @@ public enum WrapperScript {
 
         """
 
-    /// 标记字符串：检测当前 LS 路径是否已被吾们替换。
+    /// 标记字符串：检测当前 LS 路径是否已被本项目替换。
     public static let signature = "cascade-relay wrapper"
 
     /// 把模板里的端口占位符替换成真实端口。

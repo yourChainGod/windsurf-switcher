@@ -2,7 +2,7 @@
 //  BanSignal.swift
 //  Relay
 //
-//  封号信号检测器（直译 src-tauri/src/relay/ban_signal.rs，参考 dwgx WindsurfAPI auth.js BAN_PATTERNS）。
+//  封号信号检测器，参考 Windsurf 常见 auth/ban 文案。
 //
 //  用途：上游 401/403 或 200+应用层错误中，body 文本若匹配下列任一模式，
 //  视为"账号被封"信号——单次不下结论，30min 窗内连续 ≥2 次升级到永久 disable。

@@ -2,7 +2,7 @@
 //  ConnectErrorTests.swift
 //  RelayTests
 //
-//  直译 src-tauri/src/relay/connect_error.rs::tests。
+//  ConnectError 回归测试。
 //
 
 import XCTest

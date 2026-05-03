@@ -2,11 +2,11 @@
 //  DataMigration.swift
 //  Core
 //
-//  迁移旧 rust+tauri 工程的 accounts.json：
+//  迁移旧版工程的 accounts.json：
 //    旧路径：~/Library/Application Support/com.windsurf.switcher/accounts.json
 //    新路径：~/Library/Application Support/com.windsurfswitcher.native/accounts.json
 //
-//  旧 JSON schema（来自 src-tauri/src/store.rs + windsurf.rs）：
+//  旧 JSON schema：
 //    - Account 层用 snake_case：session_token / added_at / last_switched_at / cooldown_until …
 //    - JwtInfo 层用 camelCase（serde rename_all = "camelCase"）
 //    - PlanStatus 层用 camelCase（同上）
@@ -14,7 +14,7 @@
 //
 //  新 schema：全 camelCase + Date（编解码用 secondsSince1970，与旧 i64 完全兼容）。
 //
-//  设计：迁移**不删旧文件**，仅复制 + 转换；旧 binary 仍可读以便回滚。
+//  设计：迁移**不删旧文件**，仅复制 + 转换；旧版仍可读以便回滚。
 //
 
 import Foundation
@@ -108,9 +108,9 @@ struct LegacyStoreFile: Codable {
     var accounts: [LegacyAccount]
 }
 
-/// 旧 src-tauri/src/store.rs::Account 的 1:1 映射。
+/// 旧版 Account 结构的完整映射。
 struct LegacyAccount: Codable {
-    var id: String                    // Rust 端用 uuid::Uuid → 字符串形式
+    var id: String                    // 旧版 UUID 字符串
     var label: String?
     var session_token: String
     var jwt_info: LegacyJWTInfo?
@@ -149,7 +149,7 @@ struct LegacyAccount: Codable {
     }
 }
 
-/// 旧 windsurf.rs::JwtInfo（serde rename_all = "camelCase"）。
+/// 旧版 JwtInfo（camelCase）。
 struct LegacyJWTInfo: Codable {
     var sessionId: String?
     var email: String?

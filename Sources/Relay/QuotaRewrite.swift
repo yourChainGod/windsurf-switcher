@@ -2,8 +2,7 @@
 //  QuotaRewrite.swift
 //  Relay
 //
-//  GetUserStatus / GetPlanStatus 响应改写：让 LS UI 永远满血。
-//  直译 src-tauri/src/relay/server.rs::{rewrite_user_status_quota, build_fake_plan_status_body}。
+//  GetUserStatus / GetPlanStatus / CheckUserMessageRateLimit 响应改写。
 //
 //  ## 字段编号（源自 windsurf.rs parse_plan_status 注释）
 //
@@ -78,19 +77,6 @@ public enum QuotaRewrite {
         var root = Data()
         ProtoWire.writeMessageField(1, planStatus, into: &root)
         return root
-    }
-
-    /// 构造 Connect-RPC unary unauthenticated 错误响应（JSON 格式）。
-    ///
-    /// 注意：Windsurf 的 GetUserStatus 失败路径不会可靠地把 401 转成 GetUserJwt。
-    /// 这个 helper 仅保留给未来需要显式返回 Connect unauthenticated 的路径使用。
-    public static func buildUnauthenticatedBody(message: String) -> Data {
-        // 简单 JSON 编码（避开 JSONEncoder 的复杂性，message 内容可控）
-        let escaped = message
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let json = "{\"code\":\"unauthenticated\",\"message\":\"\(escaped)\"}"
-        return Data(json.utf8)
     }
 
     /// 构造伪造的 CheckUserMessageRateLimitResponse protobuf body。

@@ -2,7 +2,7 @@
 //  ProtoRewriteTests.swift
 //  RelayTests
 //
-//  直译 src-tauri/src/relay/proto_rewrite.rs::tests 的 12 个测试用例。
+//  ProtoRewrite 的 protobuf body 改写回归测试。
 //
 
 import XCTest

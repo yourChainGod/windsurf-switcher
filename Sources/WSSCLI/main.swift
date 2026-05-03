@@ -2,7 +2,7 @@
 //  main.swift
 //  WSSCLI
 //
-//  Phase 1-A 的命令行驱动器，用于验证 Core/WindsurfClient/External 已就位。
+//  命令行维护工具，用于检查环境、迁移数据、管理账号和触发切号。
 //
 //  子命令：
 //    wss-cli check           — 自检：旧 binary 状态 / 双 app 安装 / 数据目录
@@ -53,7 +53,7 @@ struct WSSCLI {
 
     static func printUsage() {
         print("""
-        wss-cli — windsurf-switcher native (Phase 1-A)
+        wss-cli — windsurf-switcher native
 
         Commands:
           check                    Self-check (legacy binary, both apps, data dir)

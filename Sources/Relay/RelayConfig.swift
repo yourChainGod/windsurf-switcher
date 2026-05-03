@@ -3,7 +3,6 @@
 //  Relay
 //
 //  Relay 端口与上游配置：stable/next 各一组 api + inference 明文端口。
-//  （cascade :42201 + DNS 劫持 + Loon plugin 那条路已废，cascade 流量直连原版上游）
 //
 
 import Foundation

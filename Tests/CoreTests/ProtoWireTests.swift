@@ -2,7 +2,7 @@
 //  ProtoWireTests.swift
 //  CoreTests
 //
-//  直译 src-tauri/src/proto.rs 的 tests + 增补真实抓包样本断言。
+//  ProtoWire 基础编解码测试 + 真实抓包样本断言。
 //
 
 import XCTest

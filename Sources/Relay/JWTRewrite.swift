@@ -3,7 +3,7 @@
 //  Relay
 //
 //  改写 GetUserJwt 响应中的 JWT exp claim。
-//  直译 src-tauri/src/relay/jwt_rewrite.rs。
+//  GetUserJwt 响应改写。
 //
 //  ## ⚠️ SAFETY: plan A 已实战否决（2026-05-02）
 //

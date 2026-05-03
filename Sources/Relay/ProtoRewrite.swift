@@ -9,10 +9,6 @@
 //    - sessionToken 永远是 `devin-session-token$<JWT>`，固定 189 字节。
 //    - 因此 delta == 0 → 不需要重算任何 length，纯 memcpy。
 //    - 体内字段顺序 / 后续字段一字节不动。
-//
-//  直译 src-tauri/src/relay/proto_rewrite.rs。
-//
-
 import Foundation
 import Core
 

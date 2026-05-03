@@ -2,7 +2,7 @@
 //  Stats.swift
 //  Relay
 //
-//  实时统计：环形 buffer + 累计计数器（直译 src-tauri/src/relay/stats.rs）。
+//  实时统计：环形 buffer + 累计计数器。
 //  给 Dashboard 提供 "最近 50 个 RPC" / "累计请求数" / "最近一分钟吞吐"。
 //
 

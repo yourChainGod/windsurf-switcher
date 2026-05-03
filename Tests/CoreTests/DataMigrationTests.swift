@@ -2,7 +2,7 @@
 //  DataMigrationTests.swift
 //  CoreTests
 //
-//  直译旧 schema 的真实样本，验证 LegacyAccount → Account 转换无丢字段。
+//  旧 schema 的真实样本，验证 LegacyAccount → Account 转换无丢字段。
 //
 
 import XCTest

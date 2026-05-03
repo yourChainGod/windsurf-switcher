@@ -7,7 +7,7 @@
 #   bash scripts/build-app.sh           # release 构建 + bundle
 #   bash scripts/build-app.sh debug     # 用 .build/debug 的二进制（开发期快速 bundle）
 #
-# 不签名（魔尊本地用足矣）。如需 codesign：
+# 默认不签名，本地安装使用足够。如需 codesign：
 #   codesign --force --deep --sign "Developer ID Application: ..." build/WindsurfSwitcher.app
 
 set -euo pipefail

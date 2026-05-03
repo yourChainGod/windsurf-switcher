@@ -2,7 +2,7 @@
 //  JWTDecode.swift
 //  WindsurfClient
 //
-//  不验签 JWT payload 解析（直译 src-tauri/src/windsurf.rs::decode_jwt_info）。
+//  不验签 JWT payload 解析。
 //  仅用作 UI 展示——上游验签由 windsurf 云端处理。
 //
 //  Token 形式两种：
@@ -32,7 +32,7 @@ public enum JWTDecode {
     }
 
     /// 不验签，仅 base64url decode payload，提取常见字段。
-    /// 解析失败返回 nil，不抛异常（旧 rust 版返回默认空 JwtInfo）。
+    /// 解析失败返回 nil，不抛异常。
     public static func decode(_ token: String) -> JWTInfo? {
         let bare = jwtOnly(token)
         let parts = bare.split(separator: ".", omittingEmptySubsequences: false)

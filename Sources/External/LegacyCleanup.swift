@@ -2,20 +2,18 @@
 //  LegacyCleanup.swift
 //  External
 //
-//  启动时清理旧 rust+tauri windsurf-switcher 的运行实例 + 已废 cascade-port-forward
-//  LaunchDaemon（监听 :443，pump 至已废的 :42201）。
+//  启动时清理旧版 windsurf-switcher 的运行实例 + 已废 cascade-port-forward
+//  LaunchDaemon。
 //
-//  - 旧 rust binary：pgrep + SIGTERM/SIGKILL（自动）
+//  - 旧版 binary：pgrep + SIGTERM/SIGKILL（自动）
 //  - cascade-port-forward LaunchDaemon：UI 提供"卸载"按钮（osascript admin）
-//
-//  cascade :42201 + DNS 劫持 + Loon plugin 路线已废，cascade chat 流量直连原版上游。
 //
 
 import Foundation
 
 public enum LegacyCleanup {
 
-    /// 旧 rust+tauri binary 进程匹配模式（pgrep -f）。
+    /// 旧版 binary 进程匹配模式（pgrep -f）。
     /// 命中：
     ///   1. cargo run 的 release 路径
     ///   2. 拷成 .app 后在 Applications 内的路径（旧版 README 描述）
