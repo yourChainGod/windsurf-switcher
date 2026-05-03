@@ -20,6 +20,7 @@ CONFIG="${1:-release}"
 APP_NAME="WindsurfSwitcher"
 BUNDLE_ID="com.windsurfswitcher.native"
 APP_DIR="build/$APP_NAME.app"
+ICON_SRC="Resources/AppIcon.icns"
 
 if [[ "$CONFIG" == "release" ]]; then
     echo "==> swift build -c release (universal arm64)"
@@ -46,6 +47,11 @@ mkdir -p "$APP_DIR/Contents/Resources"
 
 cp "$BIN_SRC" "$APP_DIR/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
+if [[ -f "$ICON_SRC" ]]; then
+    cp "$ICON_SRC" "$APP_DIR/Contents/Resources/AppIcon.icns"
+else
+    echo "⚠️  图标资源不存在：$ICON_SRC（可运行 scripts/generate-app-icon.py 生成）"
+fi
 
 VERSION="${WSS_VERSION:-0.1.0}"
 BUILD="${WSS_BUILD:-$(date +%s)}"
@@ -64,6 +70,10 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
     <string>$APP_NAME</string>
     <key>CFBundleIdentifier</key>
     <string>$BUNDLE_ID</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleVersion</key>
     <string>$BUILD</string>
     <key>CFBundleShortVersionString</key>
