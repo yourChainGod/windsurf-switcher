@@ -579,6 +579,16 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                         let update = await pool.recordFailureWithCooldown(accountId, kind: kind, cooldownOverride: override)
                         if let upd = update, let s = sink { await s.apply(upd) }
 
+                        // 记录错误响应正文片段（diagnostic）：拿前 256 字节 utf8 文本预览
+                        let bodyPreview = BanSignal.extractText(respBytes, maxBytes: 1024).prefix(256)
+                        let serverHdr = resp.headers.first(name: "server") ?? "-"
+                        let cfRay = resp.headers.first(name: "cf-ray") ?? "-"
+                        wsslog("Relay", """
+                            [\(chConfig.name)] GetUserJwt attempt \(attempt) acct=\(prefix8(accountId)) \
+                            HTTP \(statusCode) kind=\(kind) override=\(override.map { "\(Int($0))s" } ?? "nil") \
+                            server=\(serverHdr) cf-ray=\(cfRay) body=\(bodyPreview)
+                            """)
+
                         if kind == .auth {
                             let text = BanSignal.extractText(respBytes, maxBytes: 8 * 1024)
                             if BanSignal.matches(text) {
@@ -739,6 +749,14 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                     }
                     let update = await pool.recordFailureWithCooldown(accountId, kind: kind, cooldownOverride: override)
                     if let upd = update, let s = sink { await s.apply(upd) }
+                    let bodyPreview = BanSignal.extractText(respBytes, maxBytes: 1024).prefix(256)
+                    let serverHdr = resp.headers.first(name: "server") ?? "-"
+                    let cfRay = resp.headers.first(name: "cf-ray") ?? "-"
+                    wsslog("Relay", """
+                        [\(chConfig.name)] active path \(head.uri) acct=\(prefix8(accountId)) \
+                        HTTP \(statusCode) kind=\(kind) override=\(override.map { "\(Int($0))s" } ?? "nil") \
+                        server=\(serverHdr) cf-ray=\(cfRay) body=\(bodyPreview)
+                        """)
                     if kind == .auth {
                         let text = BanSignal.extractText(respBytes, maxBytes: 8 * 1024)
                         if BanSignal.matches(text) {
@@ -775,7 +793,18 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                         var excludes = Set(await pool.rotationExcludes(app: chConfig.app))
                         excludes.insert(accountId)
                         var retryCount = 0
+                        // 硬上限：防止其它本地错误把池烧穿。GetChatMessage rate-limit 平均 1-2 次 retry
+                        // 就能找到 quota 充足的号；超过 10 次还失败说明大概率不是 rate-limit 而是
+                        // 系统性故障（上游、网络、body 格式），继续 retry 只会烧账号无收益。
+                        let retryHardLimit = 10
                         while true {
+                            if retryCount >= retryHardLimit {
+                                let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+                                await stats.record(RecentRPC(path: head.uri, accountId: accountId, email: active.email, status: statusCode, durationMillis: Int(elapsed)))
+                                logger.warning("[\(chConfig.name)] GetChatMessage retry hard-limit (\(retryHardLimit)) reached acct=\(prefix8(accountId)); returning original rate-limit body")
+                                await Self.writeBack(channel: channel, eventLoop: eventLoop, status: resp.status, headers: resp.headers, body: respBytes, keepAlive: keepAlive)
+                                return
+                            }
                             let retryLease: Lease
                             do {
                                 retryLease = try await pool.lease(excludes: Array(excludes))
@@ -858,6 +887,16 @@ final class HTTPProxyHandler: ChannelInboundHandler, RemovableChannelHandler, @u
                                 await stats.record(RecentRPC(path: head.uri, accountId: retryAccountId, email: retryLease.email, status: retryStatusCode, durationMillis: Int(elapsed)))
                                 logger.info("[\(chConfig.name)] GetChatMessage rate-limit recovered acct=\(prefix8(accountId)) → acct=\(prefix8(retryAccountId)) after \(retryCount) retry")
                                 await Self.writeBack(channel: channel, eventLoop: eventLoop, status: retryResp.status, headers: retryResp.headers, body: retryBytes, keepAlive: keepAlive)
+                                return
+                            } catch let rewriteErr as ProtoRewriteError {
+                                // 本地 rewrite 失败：body 格式异常（如 gRPC-Web framing、未知 wire type 等），
+                                // 跟 retryAccount 无关，**不**计入 account failure。
+                                // 重试本身也无法成功——没法把新号 token splice 进 body，上游仍会用原 active
+                                // 号 api_key → 仍 rate-limit。直接终止 retry，把上游原始 rate-limit 响应回放给客户端。
+                                logger.warning("[\(chConfig.name)] GetChatMessage retry abort: ProtoRewrite \(rewriteErr) on acct=\(prefix8(retryAccountId)); not penalizing account; returning original rate-limit body (retries=\(retryCount))")
+                                let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+                                await stats.record(RecentRPC(path: head.uri, accountId: accountId, email: active.email, status: statusCode, durationMillis: Int(elapsed)))
+                                await Self.writeBack(channel: channel, eventLoop: eventLoop, status: resp.status, headers: resp.headers, body: respBytes, keepAlive: keepAlive)
                                 return
                             } catch {
                                 let retryUpd = await pool.recordFailureWithCooldown(

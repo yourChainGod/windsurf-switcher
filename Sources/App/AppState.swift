@@ -311,11 +311,35 @@ public final class AppState: ObservableObject {
         self.relayStatus = await relayManager.status()
     }
 
-    /// 从 store 重新加载账号列表。按 lastSwitchedAt / addedAt 倒序。
+    /// 从 store 重新加载账号列表。排序优先级：
+    ///   1. 状态：可用 > 冷却 > 封禁（让用户先看到能用的号）
+    ///   2. 剩余量分数 desc：min(weeklyPercent, dailyPercent) 或月度 credits 占比；nil 沉底
+    ///   3. lastSwitchedAt / addedAt desc（同分时新近用过的更靠前）
     public func reload() async {
         guard let store = store else { return }
         let list = await store.list()
         self.accounts = list.sorted { lhs, rhs in
+            // 1. 状态分桶：0=可用, 1=冷却, 2=封禁（数值小的优先）
+            func bucket(_ a: Account) -> Int {
+                if a.isBanned { return 2 }
+                if a.isCoolingDown { return 1 }
+                return 0
+            }
+            let lb = bucket(lhs), rb = bucket(rhs)
+            if lb != rb { return lb < rb }
+
+            // 2. 剩余量分数 desc，nil 沉底
+            let ls = lhs.remainingScore
+            let rs = rhs.remainingScore
+            switch (ls, rs) {
+            case let (l?, r?):
+                if l != r { return l > r }
+            case (.some, nil): return true
+            case (nil, .some): return false
+            case (nil, nil): break
+            }
+
+            // 3. tie-break：最近用过 / 最近添加 desc
             let lt = lhs.lastSwitchedAt ?? lhs.addedAt
             let rt = rhs.lastSwitchedAt ?? rhs.addedAt
             return lt > rt
@@ -417,6 +441,66 @@ public final class AppState: ObservableObject {
             await refreshQuota(id: saved.id)
         } catch {
             self.toast = Toast(kind: .error, text: "保存失败：\(error)")
+        }
+    }
+
+    /// 批量添加 token：先去重（输入内 + 与已有 sessionToken 比对），再逐个 upsert，
+    /// 最后只 reload 一次 + 异步刷 quota。toast 给出 added/dup/failed 汇总。
+    /// - Parameters:
+    ///   - tokens: 已经从用户输入解析出的 token 字符串列表（裸 JWT 或完整 cookie 值均可）
+    ///   - label: 备注，所有新增账号共用；空字符串视为无备注
+    public func addTokens(_ tokens: [String], label: String) async {
+        guard let store = store else { return }
+
+        // 1. 内部去重 + 与现有 sessionToken 去重
+        var seen = Set<String>()
+        var unique: [String] = []
+        let existing = Set(accounts.map { $0.sessionToken })
+        var skippedDup = 0
+        for raw in tokens {
+            let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { continue }
+            if seen.contains(t) { skippedDup += 1; continue }
+            seen.insert(t)
+            if existing.contains(t) { skippedDup += 1; continue }
+            unique.append(t)
+        }
+
+        guard !unique.isEmpty else {
+            if skippedDup > 0 {
+                self.toast = Toast(kind: .warning, text: "全部 \(skippedDup) 个 token 已存在或重复")
+            } else {
+                self.toast = Toast(kind: .warning, text: "未识别到 token")
+            }
+            return
+        }
+
+        // 2. 逐个 upsert（save 一次写盘略费，但量级小可接受；保持一致性）
+        var addedIds: [UUID] = []
+        var failed = 0
+        for t in unique {
+            var account = Account(label: label, sessionToken: t)
+            account.jwtInfo = JWTDecode.decode(t)
+            do {
+                let saved = try await store.upsert(account)
+                addedIds.append(saved.id)
+            } catch {
+                failed += 1
+            }
+        }
+
+        // 3. 一次性 reload + 汇总 toast
+        await reload()
+        var parts: [String] = []
+        parts.append("新增 \(addedIds.count)")
+        if skippedDup > 0 { parts.append("去重 \(skippedDup)") }
+        if failed > 0 { parts.append("失败 \(failed)") }
+        let kind: Toast.Kind = failed > 0 ? .warning : .success
+        self.toast = Toast(kind: kind, text: parts.joined(separator: " · "))
+
+        // 4. 异步刷 quota（不阻塞 UI）
+        for id in addedIds {
+            Task { await self.refreshQuota(id: id) }
         }
     }
 

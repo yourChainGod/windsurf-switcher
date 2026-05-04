@@ -14,6 +14,10 @@ struct WindsurfSwitcherApp: App {
     @StateObject private var state = AppState()
 
     init() {
+        // 第一步：启用持久化日志（dup2 stdout/stderr → 文件，bootstrap swift-log）。
+        // 必须在所有 print / Logger / FileHandle.standardError 之前；幂等。
+        AppLogging.bootstrap()
+
         // 关键修复：SwiftPM 裸 binary 默认 activationPolicy=.prohibited，
         // 导致 MenuBarExtra 创建的 NSStatusItem 不显示。强制设 .accessory
         // 让进程成为合法的菜单栏 app（无 dock 图标，但可显示菜单栏 + 弹窗）。

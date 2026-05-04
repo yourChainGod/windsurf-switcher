@@ -146,4 +146,26 @@ public struct Account: Codable, Identifiable, Equatable, Sendable {
         guard let until = bannedUntil else { return false }
         return until > Date()
     }
+
+    /// 归一化"剩余量"分数 0…100（数值越大 = 剩余越多）。无配额数据返回 nil。
+    ///
+    /// 取数优先级：
+    ///   1. cascade 百分比配额：取 min(weeklyPercent, dailyPercent)（瓶颈口径）
+    ///   2. 单边百分比（只有 daily 或只有 weekly）
+    ///   3. 月度 credits：promptRemaining / promptLimit * 100
+    ///   4. 都没有 → nil（让 UI 排序时沉到末尾）
+    public var remainingScore: Double? {
+        if let ps = planStatus {
+            switch (ps.dailyPercent, ps.weeklyPercent) {
+            case let (d?, w?): return Double(min(d, w))
+            case let (d?, nil): return Double(d)
+            case let (nil, w?): return Double(w)
+            default: break
+            }
+            if let rem = ps.promptRemaining, let lim = ps.promptLimit, lim > 0 {
+                return min(100.0, max(0.0, Double(rem) / Double(lim) * 100.0))
+            }
+        }
+        return nil
+    }
 }

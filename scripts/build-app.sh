@@ -53,7 +53,7 @@ else
     echo "⚠️  图标资源不存在：$ICON_SRC（可运行 scripts/generate-app-icon.py 生成）"
 fi
 
-VERSION="${WSS_VERSION:-0.1.0}"
+VERSION="${WSS_VERSION:-0.2.0}"
 BUILD="${WSS_BUILD:-$(date +%s)}"
 
 echo "==> 生成 Info.plist"

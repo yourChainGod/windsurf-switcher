@@ -14,7 +14,7 @@ cd "$ROOT"
 
 APP_NAME="WindsurfSwitcher"
 APP_DIR="build/$APP_NAME.app"
-VERSION="${WSS_VERSION:-0.1.0}"
+VERSION="${WSS_VERSION:-0.2.0}"
 DMG_NAME="$APP_NAME-$VERSION"
 DMG_PATH="build/$DMG_NAME.dmg"
 STAGING="build/.dmg-staging"

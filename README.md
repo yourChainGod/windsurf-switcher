@@ -102,7 +102,7 @@ bash scripts/build-dmg.sh
 产物：
 
 - `build/WindsurfSwitcher.app`
-- `build/WindsurfSwitcher-0.1.0.dmg`
+- `build/WindsurfSwitcher-0.2.0.dmg`
 
 ## 本机端口
 
@@ -143,6 +143,30 @@ curl -s -X POST http://127.0.0.1:42199/__relay/accounts \
 
 迁移只复制并转换账号数据，不删除旧文件。应用启动时如果新数据为空，会自动尝试迁移；也可以用 CLI 手动执行。
 
+## 持久化日志（早期调试用，后期稳定会移除）
+
+> **注意**：当前版本会把所有 `print` / `Logger` / stdout / stderr 输出落盘，方便复现偶发账号冷却 / relay 异常时回看现场。等行为稳定后这个文件会被默认禁用。
+
+日志路径：
+
+```text
+~/Library/Logs/com.windsurfswitcher.native/wss.log
+```
+
+特点：
+
+- 启动时打印 banner（pid + version + 时间戳），跨重启可对应进程
+- 单文件 10 MB 自动滚动到 `wss.log.1`，最多两份
+- 关键事件：账号冷却 / 解封、`GetUserJwt` 5 次重试链路、`GetChatMessage` 限流退避、proto 改写错误、池快照（total/cooled/banned/quota_exhausted）
+
+排障常用：
+
+```bash
+tail -f ~/Library/Logs/com.windsurfswitcher.native/wss.log
+grep -E "Pool|recordFailure|allExcluded" ~/Library/Logs/com.windsurfswitcher.native/wss.log | tail -50
+grep "WSS log opened" ~/Library/Logs/com.windsurfswitcher.native/wss.log    # 看本机所有启动记录
+```
+
 ## 命令行工具
 
 Swift package 内置 `wss-cli`：
@@ -178,6 +202,12 @@ swift run wss-cli kill-legacy
 ```
 
 ## 故障排查
+
+第一步：看日志（早期调试默认开启，后期稳定会移除）：
+
+```bash
+tail -200 ~/Library/Logs/com.windsurfswitcher.native/wss.log
+```
 
 看不到菜单栏图标：
 

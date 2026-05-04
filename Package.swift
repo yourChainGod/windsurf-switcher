@@ -67,7 +67,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "App",
-            dependencies: ["Core", "WindsurfClient", "External", "Wrapper", "Relay"],
+            dependencies: [
+                "Core", "WindsurfClient", "External", "Wrapper", "Relay",
+                .product(name: "Logging", package: "swift-log"),
+            ],
             path: "Sources/App"
         ),
         .testTarget(

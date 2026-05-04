@@ -118,10 +118,24 @@ public actor Pool {
         let now = nowProvider()
 
         if entries.isEmpty {
+            wsslog("Pool", "lease FAIL: pool empty (excludes=\(excludes.count))")
             throw PoolError.empty
         }
 
         guard let entry = pickBestAvailable(now: now, excludes: excludes) else {
+            // 池非空但没人可用——通常意味着大批量被冷却。给出全局快照便于定位。
+            let total = entries.count
+            var cooled = 0, banned = 0, exhausted = 0
+            for e in entries.values {
+                if let bu = e.bannedUntil, bu > now { banned += 1; continue }
+                if let cu = e.cooldownUntil, cu > now { cooled += 1; continue }
+                if let d = e.dailyPercent, d == 0 { exhausted += 1; continue }
+                if let w = e.weeklyPercent, w == 0 { exhausted += 1 }
+            }
+            wsslog("Pool", """
+                lease FAIL allExcluded: total=\(total) cooled=\(cooled) banned=\(banned) \
+                quota_exhausted=\(exhausted) excludes=\(excludes.count)
+                """)
             throw PoolError.allExcluded
         }
 
@@ -227,16 +241,24 @@ public actor Pool {
         cooldownOverride: TimeInterval?
     ) -> AccountUpdate? {
         let now = nowProvider()
-        guard var entry = entries[accountId] else { return nil }
+        guard var entry = entries[accountId] else {
+            wsslog("Pool", "recordFailure acct=\(accountId.prefix(8)) kind=\(kind) → entry NOT FOUND (skipped)")
+            return nil
+        }
+        let prevConsec = entry.consecutiveFailures
+        let prevStreak = entry.internalErrorStreak
+        let prevCool = entry.cooldownUntil
         entry.consecutiveFailures = entry.consecutiveFailures &+ 1
 
         var effective: TimeInterval? = cooldownOverride ?? kind.cooldown(config)
+        var streakHit = false
 
         if kind == .transient && cooldownOverride == nil {
             entry.internalErrorStreak = entry.internalErrorStreak &+ 1
             if entry.internalErrorStreak >= config.internalErrorStreakThreshold {
                 effective = config.cooldownOnInternalErrorStreak
                 entry.internalErrorStreak = 0
+                streakHit = true
             }
         }
 
@@ -244,18 +266,45 @@ public actor Pool {
             entry.cooldownUntil = now + Int64(d)
         }
         entries[accountId] = entry
+
+        // 详细日志：每次 failure 记账都打一行，下次复盘可还原"谁在何时被冷却、为什么"。
+        let coolStr: String
+        if let cu = entry.cooldownUntil {
+            let until = Date(timeIntervalSince1970: TimeInterval(cu))
+            let f = DateFormatter()
+            f.dateFormat = "HH:mm:ss"
+            coolStr = "until=\(f.string(from: until))(+\(Int(effective ?? 0))s)"
+        } else {
+            coolStr = "no-cooldown"
+        }
+        let reason = streakHit ? "streak-hit" : (cooldownOverride != nil ? "override" : "default")
+        wsslog("Pool", """
+            recordFailure acct=\(accountId.prefix(8)) kind=\(kind) \
+            consec=\(prevConsec)→\(entry.consecutiveFailures) \
+            streak=\(prevStreak)→\(entry.internalErrorStreak)\(streakHit ? "(reset)" : "") \
+            override=\(cooldownOverride.map { "\(Int($0))s" } ?? "nil") \
+            cooldown_prev=\(prevCool.map(String.init) ?? "nil") \
+            \(coolStr) reason=\(reason)
+            """)
         return makeUpdate(entry)
     }
 
     @discardableResult
     public func recordBanSignal(_ accountId: String) -> AccountUpdate? {
         let now = nowProvider()
-        guard var entry = entries[accountId] else { return nil }
+        guard var entry = entries[accountId] else {
+            wsslog("Pool", "recordBanSignal acct=\(accountId.prefix(8)) → entry NOT FOUND (skipped)")
+            return nil
+        }
+        let prevCount = entry.banSignalCount
+        let prevFirst = entry.banSignalFirstAt
+        var windowReset = false
 
         if let firstAt = entry.banSignalFirstAt {
             if now - firstAt > Int64(config.banSignalWindow) {
                 entry.banSignalCount = 0
                 entry.banSignalFirstAt = nil
+                windowReset = true
             }
         }
         if entry.banSignalFirstAt == nil {
@@ -263,22 +312,39 @@ public actor Pool {
         }
         entry.banSignalCount = entry.banSignalCount &+ 1
 
+        var promoted = false
         if entry.banSignalCount >= config.banSignalThreshold {
             entry.bannedUntil = now + Int64(config.bannedLockout)
+            promoted = true
         }
         entries[accountId] = entry
+        wsslog("Pool", """
+            recordBanSignal acct=\(accountId.prefix(8)) \
+            count=\(prevCount)→\(entry.banSignalCount)/\(config.banSignalThreshold) \
+            window_reset=\(windowReset) firstAt_prev=\(prevFirst.map(String.init) ?? "nil") \
+            promoted_banned=\(promoted) bannedUntil=\(entry.bannedUntil.map(String.init) ?? "nil")
+            """)
         return makeUpdate(entry)
     }
 
     @discardableResult
     public func recordSuccess(_ accountId: String) -> AccountUpdate? {
-        guard var entry = entries[accountId] else { return nil }
+        guard var entry = entries[accountId] else {
+            wsslog("Pool", "recordSuccess acct=\(accountId.prefix(8)) → entry NOT FOUND (skipped)")
+            return nil
+        }
+        let hadCool = entry.cooldownUntil != nil
+        let prevConsec = entry.consecutiveFailures
+        let prevBan = entry.banSignalCount
         entry.cooldownUntil = nil
         entry.consecutiveFailures = 0
         entry.internalErrorStreak = 0
         entry.banSignalCount = 0
         entry.banSignalFirstAt = nil
         entries[accountId] = entry
+        if hadCool || prevConsec > 0 || prevBan > 0 {
+            wsslog("Pool", "recordSuccess acct=\(accountId.prefix(8)) cleared (hadCooldown=\(hadCool) consec=\(prevConsec) banSig=\(prevBan))")
+        }
         return makeUpdate(entry)
     }
 
